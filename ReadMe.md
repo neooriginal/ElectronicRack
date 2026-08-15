@@ -1,150 +1,71 @@
-# Electronic Rack
+<p align="center">
+  <img src="docs/readme-hero.svg" width="720" alt="Rack — search, glow, count">
+</p>
 
-ESP32 firmware + web UI for a NeoPixel-backed component organizer. Default layout is **6×6 = 36 bins** (change to 6×5 or anything else in Setup). Search a part, stocked bins rise to the top, the matching compartment lights up, and +/− is the whole check-in / check-out flow.
+<p align="center">
+  <a href="http://rack.local"><code>rack.local</code></a>
+  ·
+  <a href="docs/API.md">API</a>
+  ·
+  <a href="https://github.com/neooriginal/ElectronicRack/releases/latest">latest build</a>
+</p>
 
-## What you get
+Search “10k” or “flux” on your phone. If it’s in the rack, that bin lights up. Tap **+** when you put some in, **−** when you take some out.
 
-- Station Wi-Fi (SSID/password in `include/secrets.h`) and `http://rack.local:8080`
-- Fallback AP `RACK-xxxxxxxx` if station join fails, so the UI is never bricked
-- Fast local catalog: every common resistor / capacitor / inductor value generated in the browser, plus a curated bench list (solder, flux, Pis, ESPs, passives kits, tools)
-- Live search against public JLCPCB / LCSC indexes when you type a manufacturer part
-- Persistent inventory and settings on LittleFS
-- Expandable grid, LED pin / count / color order, wiring math, per-bin LED overrides
-- Startup + idle animations, locate pulse, calibration corners, walk, tap-to-map
-- Backup / restore JSON from the UI
-- GitHub Actions builds firmware on every commit and publishes a rolling `latest` release
-- In-app OTA pulls `firmware.bin` + `littlefs.bin` from that release (`neooriginal/ElectronicRack`)
+The page is served by the ESP32. Nothing else to host.
 
-Wi-Fi is the only compile-time setting. Everything else is in the web UI.
+---
 
-## Hardware
+### What you need
 
-- ESP32 DevKit
-- WS2812 / WS2812B / SK6812 **RGB** strip, one LED behind each bin
-- **GPIO 13** = data (change in Setup; if you change it, power-cycle after save)
-- Common ground between ESP32 and the 5 V LED supply
-- 36 LEDs at full white can exceed 2 A — use a dedicated 5 V supply and keep brightness modest
+| | What |
+| --- | --- |
+| Board | ESP32 DevKit |
+| Lights | One WS2812-style LED per bin, data on **GPIO 13** |
+| Power | Shared ground, and a real **5 V** rail — USB will fold under a full strip |
 
-Typical strip: DIN → GPIO 13 with a 330–470 Ω resistor, 1000 µF across the strip 5 V rail.
+Default layout is **6×6**. Setup can grow it.
 
-## Flash
+<p align="center">
+  <img src="docs/readme-zigzag.svg" width="420" alt="Zig-zag LED wiring from A1">
+</p>
 
-1. Copy credentials:
+---
 
-```bash
-cp include/secrets.example.h include/secrets.h
-```
-
-2. Edit `WIFI_SSID` / `WIFI_PASS`.
-
-3. Install [PlatformIO](https://platformio.org/) and run:
+### Flash once
 
 ```bash
-pio run -t upload
-pio run -t uploadfs
-pio device monitor
+cp include/secrets.example.h include/secrets.h   # your Wi-Fi
+pio run -t upload && pio run -t uploadfs
 ```
 
-The filesystem image is the UI (`data/`). Re-upload it whenever you change HTML/CSS/JS.
+Then open **http://rack.local**. If the network isn’t there, the board raises an open AP named `RACK-…`.
 
-Then open `http://rack.local:8080` or `http://<ip>:8080`.
+After this USB flash, new firmware comes from **Setup → Firmware**.
 
-This USB flash is required **once** after the dual-OTA partition table change. Later updates install from **Setup → Firmware**.
+---
 
-## First-run calibration
+### First evening
 
-1. **Setup → LED wiring**
-2. Set LED count, then **Light corners**
-   - A1 = red
-   - last column on row 1 = green
-   - last row, column A = blue
-   - opposite corner = white
-3. Flip *LED 0 corner*, *Then run*, and *Serpentine* until the four corners match the physical strip. That is the whole automatic map.
-4. If a few bins are still wrong, **Tap-to-map**: LED N lights, tap that bin on the Grid tab, repeat.
-5. **Walk bins** to watch every compartment in label order.
+1. **Setup → Use zig-zag from A1 → Light corners**  
+   A1 red · far top green · far left blue · opposite white. Match that, you’re calibrated.
+2. **Walk bins** if you want the slow tour.
+3. Search something you actually own. Tap **+**. Put it in the glowing hole.
 
-Changes save immediately.
+Rows, brightness, animations — change them whenever. It saves itself.
 
-## Daily use
+---
 
-- Type `10k`, `100n`, `4k7 0603`, `flux`, `ESP32`, or an LCSC code
-- Stocked hits are first, with bin label and count
-- Tap a row: that bin pulses cyan
-- + / − (hold to repeat) is put-in / take-out
-- New part: first empty bin is pre-selected — change bin on the mini-grid if needed, set qty, done
-- Grid tab is the physical map; tap an empty bin then search to fill it
+### After that
 
-Keyboard: `/` search, arrows, Enter, `+` / `-`, Esc.
+More drawers? Raise rows, columns, and LED count. Old stock keeps its names.
 
-## Expand the rack
+Every push to `main` publishes a GitHub `latest` release. The rack notices.
 
-Setup → raise **Rows** / **Columns** and **LED count**. New bins are empty. Inventory in old labels stays put. You can run multiple strips as one logical chain (offset + count).
-
-## Local UI without hardware
+Scripts talk to it too — [docs/API.md](docs/API.md), also at `http://rack.local/api.md`.
 
 ```bash
-python3 scripts/generate_named_parts.py
-python3 scripts/dev_server.py
+curl http://rack.local/api/find?q=10k
+curl http://rack.local/api/locate?cell=A3
+curl 'http://rack.local/api/add?cell=A3&n=5'
 ```
-
-Open `http://127.0.0.1:8080/`. LED calls print to the terminal.
-
-## Project layout
-
-```
-include/     public headers + secrets
-src/         firmware modules (storage, rack map, inventory, LEDs, Wi-Fi, HTTP, catalog proxy)
-data/        LittleFS web UI
-scripts/     named-part generator, desktop API, PlatformIO pre-script
-```
-
-Firmware is split so the LED engine, inventory, and HTTP API can change independently. The browser owns search ranking so the ESP32 stays snappy.
-
-## API
-
-Full reference: **[docs/API.md](docs/API.md)** (also served on the device as `/api.md`).
-
-Quick GET API — one URL, no body:
-
-```bash
-curl http://rack.local:8080/api/find?q=10k
-curl http://rack.local:8080/api/locate?cell=A3
-curl 'http://rack.local:8080/api/add?cell=A3&n=5'
-```
-
-`GET /api` lists every route. `GET /api/bootstrap` is status + config + inventory in one request.
-
-## API (short)
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| GET | `/api/status` | IP, heap, firmware |
-| GET/PUT | `/api/config` | Grid, wiring, LEDs, UI flags |
-| GET/PUT | `/api/inventory` | Full inventory |
-| POST | `/api/stock/place` | Put a part in a bin |
-| POST | `/api/stock/adjust` | `{ cell, delta }` |
-| POST | `/api/locate` | Pulse a bin |
-| POST | `/api/leds` | `idle` / `corners` / `walk` / `identify` / `startup` / `off` |
-| GET | `/api/catalog/remote?q=` | JLCPCB / LCSC proxy |
-| GET/POST | `/api/backup` `/api/restore` | Snapshot |
-| GET | `/api/update` | Current vs GitHub latest |
-| POST | `/api/update/check` | Fetch `version.json` from the rolling release |
-| POST | `/api/update/install` | Flash LittleFS then firmware, reboot |
-
-WebSocket `/ws` pushes `status`, `dirty`, walk highlights, and `ota` progress.
-
-## Firmware updates
-
-Every push to `main` builds with PlatformIO and replaces the GitHub Release tagged **`latest`**:
-
-- `firmware.bin`
-- `littlefs.bin` (web UI)
-- `version.json` (`version`, `git`, `built`)
-
-The device is hardcoded to `neooriginal/ElectronicRack`. About 4 seconds after Wi-Fi comes up it checks:
-
-`https://github.com/neooriginal/ElectronicRack/releases/latest/download/version.json`
-
-If the git hash differs, Setup → Firmware shows **Install update**. That pulls the two `.bin` files from the same release over HTTPS and reboots.
-
-USB flash this build once (partition table changed to dual-OTA). After that, OTA is enough.

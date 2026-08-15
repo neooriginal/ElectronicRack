@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 280" role="img" aria-label="Rack">
+  <defs>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e6a15c" stop-opacity=".18"/>
+      <stop offset="1" stop-color="#3dd6e0" stop-opacity=".08"/>
+    </linearGradient>
+    <pattern id="dots" width="18" height="18" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="0.7" fill="#f4efe6" fill-opacity=".08"/>
+    </pattern>
+  </defs>
+  <rect width="960" height="280" rx="20" fill="#090a0c"/>
+  <rect width="960" height="280" rx="20" fill="url(#glow)"/>
+  <rect width="960" height="280" rx="20" fill="url(#dots)"/>
+  <rect x=".5" y=".5" width="959" height="279" rx="20" fill="none" stroke="#f4efe6" stroke-opacity=".08"/>
+
+  <!-- 6x6 bins, zig-zag hint: even rows L→R copper, odd rows dimmer -->
+  <g transform="translate(56,58)">
+    <!-- row 0 -->
+    <rect x="0" y="0" width="22" height="22" rx="5" fill="#e6a15c"/>
+    <rect x="28" y="0" width="22" height="22" rx="5" fill="#c98a4e"/>
+    <rect x="56" y="0" width="22" height="22" rx="5" fill="#a87442"/>
+    <rect x="84" y="0" width="22" height="22" rx="5" fill="#8a6238"/>
+    <rect x="112" y="0" width="22" height="22" rx="5" fill="#6e4e2e"/>
+    <rect x="140" y="0" width="22" height="22" rx="5" fill="#3dd6e0"/>
+    <!-- row 1 -->
+    <rect x="0" y="28" width="22" height="22" rx="5" fill="#1a3336"/>
+    <rect x="28" y="28" width="22" height="22" rx="5" fill="#1a3336"/>
+    <rect x="56" y="28" width="22" height="22" rx="5" fill="#244247"/>
+    <rect x="84" y="28" width="22" height="22" rx="5" fill="#2c555b"/>
+    <rect x="112" y="28" width="22" height="22" rx="5" fill="#2f6b72"/>
+    <rect x="140" y="28" width="22" height="22" rx="5" fill="#2a8a93"/>
+    <!-- row 2 -->
+    <rect x="0" y="56" width="22" height="22" rx="5" fill="#2a241c"/>
+    <rect x="28" y="56" width="22" height="22" rx="5" fill="#3a3228"/>
+    <rect x="56" y="56" width="22" height="22" rx="5" fill="#171a1f"/>
+    <rect x="84" y="56" width="22" height="22" rx="5" fill="#171a1f"/>
+    <rect x="112" y="56" width="22" height="22" rx="5" fill="#171a1f"/>
+    <rect x="140" y="56" width="22" height="22" rx="5" fill="#171a1f"/>
+    <!-- row 3–5 empty -->
+    <rect x="0" y="84" width="22" height="22" rx="5" fill="#12151a"/>
+    <rect x="28" y="84" width="22" height="22" rx="5" fill="#12151a"/>
+    <rect x="56" y="84" width="22" height="22" rx="5" fill="#12151a"/>
+    <rect x="84" y="84" width="22" height="22" rx="5" fill="#12151a"/>
+    <rect x="112" y="84" width="22" height="22" rx="5" fill="#12151a"/>
+    <rect x="140" y="84" width="22" height="22" rx="5" fill="#12151a"/>
+    <rect x="0" y="112" width="22" height="22" rx="5" fill="#101216"/>
+    <rect x="28" y="112" width="22" height="22" rx="5" fill="#101216"/>
+    <rect x="56" y="112" width="22" height="22" rx="5" fill="#101216"/>
+    <rect x="84" y="112" width="22" height="22" rx="5" fill="#101216"/>
+    <rect x="112" y="112" width="22" height="22" rx="5" fill="#101216"/>
+    <rect x="140" y="112" width="22" height="22" rx="5" fill="#101216"/>
+    <rect x="0" y="140" width="22" height="22" rx="5" fill="#0e1014"/>
+    <rect x="28" y="140" width="22" height="22" rx="5" fill="#0e1014"/>
+    <rect x="56" y="140" width="22" height="22" rx="5" fill="#0e1014"/>
+    <rect x="84" y="140" width="22" height="22" rx="5" fill="#0e1014"/>
+    <rect x="112" y="140" width="22" height="22" rx="5" fill="#0e1014"/>
+    <rect x="140" y="140" width="22" height="22" rx="5" fill="#0e1014"/>
+  </g>
+
+  <text x="268" y="128" fill="#f4efe6" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="56" font-weight="700" letter-spacing="14">RACK</text>
+  <text x="272" y="168" fill="#9a9388" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Helvetica, Arial, sans-serif" font-size="18" letter-spacing="0.4">Search. Glow. Count.</text>
+  <text x="272" y="198" fill="#6b655c" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">http://rack.local</text>
+</svg>

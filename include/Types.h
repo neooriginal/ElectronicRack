@@ -65,6 +65,7 @@ struct AppConfig {
   IdleAnim idleAnim = IdleAnim::Breathe;
   StartupAnim startupAnim = StartupAnim::Cascade;
 
+  // Default strip: A1 → right along row 1, then left along row 2, then right along row 3, …
   WiringOrigin origin = WiringOrigin::TopLeft;
   bool rowFirst = true;
   bool serpentine = true;

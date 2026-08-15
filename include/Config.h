@@ -9,7 +9,7 @@
 #endif
 #define FW_NAME           "ElectronicRack"
 #define MDNS_HOSTNAME     "rack"
-#define HTTP_PORT         8080
+#define HTTP_PORT         80
 
 // Rolling GitHub Release used by OTA. Assets: firmware.bin, littlefs.bin, version.json
 #define GITHUB_REPO       "neooriginal/ElectronicRack"

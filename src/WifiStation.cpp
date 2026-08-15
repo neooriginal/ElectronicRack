@@ -31,7 +31,8 @@ void WifiStation::begin(const std::function<void()>& pump) {
 
   if (MDNS.begin(MDNS_HOSTNAME)) {
     MDNS.addService("http", "tcp", HTTP_PORT);
-    Serial.printf("[wifi] http://%s.local:%u\n", MDNS_HOSTNAME, HTTP_PORT);
+    if (HTTP_PORT == 80) Serial.printf("[wifi] http://%s.local\n", MDNS_HOSTNAME);
+    else Serial.printf("[wifi] http://%s.local:%u\n", MDNS_HOSTNAME, HTTP_PORT);
   }
 }
 

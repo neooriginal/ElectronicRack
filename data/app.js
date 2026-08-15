@@ -608,21 +608,22 @@ function renderSettings() {
       <h3>LED wiring</h3>
       <div class="fields">
         ${select("origin", "LED 0 corner", cfg.wiring.origin, [
-          ["top-left","Top left"],["top-right","Top right"],["bottom-left","Bottom left"],["bottom-right","Bottom right"]])}
+          ["top-left","Top left (A1)"],["top-right","Top right"],["bottom-left","Bottom left"],["bottom-right","Bottom right"]])}
         ${select("axis", "Then run", cfg.wiring.rowFirst ? "row" : "col", [["row","Along the row"],["col","Along the column"]])}
-        ${check("serpentine", "Serpentine (snake)", cfg.wiring.serpentine)}
+        ${check("serpentine", "Zig-zag (default)", cfg.wiring.serpentine)}
         ${field("offset", "LED index offset", cfg.wiring.offset, "number")}
         ${field("ledCount", "LED count", cfg.leds.count, "number")}
         ${field("pin", "Data pin (GPIO)", cfg.leds.pin, "number")}
         ${select("order", "Color order", cfg.leds.order, ["GRB","RGB","BRG","RBG","GBR","BGR"].map((x)=>[x,x]))}
       </div>
       <div class="row-btns" style="margin-top:12px">
-        <button class="solid" id="btnCorners">Light corners</button>
+        <button class="solid" id="btnZigzag">Use zig-zag from A1</button>
+        <button class="ghost" id="btnCorners">Light corners</button>
         <button class="ghost" id="btnWalk">Walk bins</button>
         <button class="ghost" id="btnMap">Tap-to-map LED ${state.mapLed}</button>
         <button class="ghost" id="btnClearMap">Clear overrides</button>
       </div>
-      <p class="help">Corners: A1 red, last column green, last row blue, opposite white. If that matches the physical rack, you’re calibrated. Tap-to-map lights one LED at a time — tap the bin that actually lit.</p>
+      <p class="help">Default zig-zag: start A1 (top-left), go right to the end of the first row, drop to the right of the second row and go left, then left-to-right on the third row, and so on. Corners: A1 red, last column green, last row blue, opposite white. Tap-to-map only if a few bins are still wrong.</p>
     </div>
     <div class="card">
       <h3>Look</h3>
@@ -677,6 +678,14 @@ function renderSettings() {
       await patchFromSettings();
     });
   });
+  $("#btnZigzag").onclick = async () => {
+    $("#settings [data-k='origin']").value = "top-left";
+    $("#settings [data-k='axis']").value = "row";
+    $("#settings [data-k='serpentine']").checked = true;
+    $("#settings [data-k='offset']").value = "0";
+    await patchFromSettings();
+    toast("Zig-zag from A1");
+  };
   $("#btnCorners").onclick = () => api.send("/api/leds", "POST", { mode: "corners" });
   $("#btnWalk").onclick = () => api.send("/api/leds", "POST", { mode: "walk" });
   $("#btnMap").onclick = () => startMap();
@@ -978,7 +987,7 @@ async function boot() {
     await refreshAll();
   } catch (e) {
     $("#sysText").textContent = "API offline";
-    toast("Firmware API not reachable — start the device or ./scripts/dev_server.py");
+    toast("Can't reach the rack. Open this page from the ESP32, not a local file.");
   }
   renderChips();
   renderResults();

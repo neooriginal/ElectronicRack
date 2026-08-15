@@ -1,10 +1,10 @@
-# Electronic Rack API
+# Rack API
 
-Base URL: `http://<ip>:8080` or `http://rack.local:8080`
+Talk to the ESP32 on your LAN. No login.
 
-JSON, no auth, LAN only. Cell names are `A1` (column letter + 1-based row).
+Base: `http://rack.local` (or the board’s IP). This file is also at `/api.md` on the device. `GET /api` lists every route.
 
-On the device this file is also at **`/api.md`**. `GET /api` returns a machine-readable index.
+Bins are named like `A3` — column letter, row number.
 
 ## Quick API (GET, one line)
 
@@ -21,10 +21,10 @@ These are meant for curl, Shortcuts, bookmarks, and NFC tags.
 | `GET /api/take?cell=A3` | Take one out (`&n=5` for five) |
 
 ```bash
-curl http://rack.local:8080/api/find?q=10k
-curl http://rack.local:8080/api/locate?cell=A3
-curl 'http://rack.local:8080/api/add?cell=A3&n=10'
-curl 'http://rack.local:8080/api/take?cell=A3&n=1'
+curl http://rack.local/api/find?q=10k
+curl http://rack.local/api/locate?cell=A3
+curl 'http://rack.local/api/add?cell=A3&n=10'
+curl 'http://rack.local/api/take?cell=A3&n=1'
 ```
 
 `add` / `take` change stock. Don’t cache them.
@@ -34,7 +34,7 @@ curl 'http://rack.local:8080/api/take?cell=A3&n=1'
 ### Status and config
 
 `GET /api/status` — IP, heap, firmware, git, repo  
-`GET /api/config` — grid, wiring, LEDs, per-cell LED map  
+`GET /api/config` — grid, wiring, LEDs, per-cell LED map. Default wiring is zig-zag from A1 (`origin: top-left`, `rowFirst: true`, `serpentine: true`).  
 `PUT /api/config` — merge a partial config JSON, persist
 
 ### Inventory
