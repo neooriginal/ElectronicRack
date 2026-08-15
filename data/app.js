@@ -26,6 +26,8 @@ const state = {
   mapping: false,
   mapLed: 0,
   lastUndo: null,
+  ota: null,
+  ignoreDirtyUntil: 0,
 };
 
 const api = {
@@ -93,20 +95,60 @@ function primaryLoc(item) {
   return (item.locs && item.locs[0]) || null;
 }
 
+function touchDirty() {
+  state.ignoreDirtyUntil = Date.now() + 1000;
+}
+
+function locCell(loc) {
+  return loc.cell || cellLabel(loc.row, loc.col);
+}
+
+function applyLocalQty(cell, qty) {
+  for (const item of state.inventory) {
+    for (const loc of item.locs || []) {
+      if (locCell(loc) !== cell) continue;
+      loc.qty = qty;
+      loc.cell = cell;
+    }
+    item.locs = (item.locs || []).filter((l) => l.qty > 0);
+    item.qty = (item.locs || []).reduce((a, l) => a + l.qty, 0);
+  }
+  state.inventory = state.inventory.filter((i) => (i.locs || []).length);
+  if (state.selected) state.selected.stock = findStockMatch(state.selected);
+  const input = $("#qty");
+  if (input && state.placeCell && state.placeCell.cell === cell) input.value = String(Math.max(0, qty));
+  if (state.view === "find") renderResults();
+  if (state.view === "rack") renderGrid();
+}
+
 async function refreshAll() {
-  const [cfg, inv, st] = await Promise.all([
-    api.get("/api/config"),
-    api.get("/api/inventory"),
-    api.get("/api/status"),
-  ]);
-  state.config = cfg;
-  state.inventory = inv.items || [];
-  state.status = st;
-  $("#rackName").textContent = cfg.rackName || "Bench Rack";
+  let boot;
+  try {
+    boot = await api.get("/api/bootstrap");
+  } catch {
+    const [cfg, inv, st] = await Promise.all([
+      api.get("/api/config"),
+      api.get("/api/inventory"),
+      api.get("/api/status"),
+    ]);
+    boot = { ...st, config: cfg, inventory: inv };
+  }
+  state.config = boot.config;
+  state.inventory = (boot.inventory && boot.inventory.items) || [];
+  state.status = boot;
+  $("#rackName").textContent = (boot.config && boot.config.rackName) || "Bench Rack";
   paintSys();
   if (state.view === "find") renderResults();
   if (state.view === "rack") renderGrid();
   if (state.view === "settings") renderSettings();
+}
+
+async function refreshInventory() {
+  const inv = await api.get("/api/inventory");
+  state.inventory = inv.items || [];
+  if (state.selected) state.selected.stock = findStockMatch(state.selected);
+  if (state.view === "find") renderResults();
+  if (state.view === "rack") renderGrid();
 }
 
 function paintSys() {
@@ -115,6 +157,11 @@ function paintSys() {
   const s = state.status || {};
   pip.className = "pip " + (s.ip ? "ok" : "warn");
   text.textContent = s.ip ? `${s.ip} · ${s.heap || 0}B` : "offline";
+  const chip = $("#otaChip");
+  if (chip) {
+    chip.hidden = !(state.ota && state.ota.available);
+    chip.onclick = () => setView("settings");
+  }
 }
 
 function setView(name) {
@@ -171,7 +218,7 @@ function renderResults() {
   };
 
   if (!q && !stock.length) {
-    root.innerHTML = `<div class="empty">Type a value, MPN, or name. Stocked parts always rise to the top.</div>`;
+    root.innerHTML = `<div class="empty"><strong>Rack is empty.</strong>Search a value or name, tap it, then + to drop it in the first empty bin. Stocked parts always rise to the top.</div>`;
     return;
   }
 
@@ -206,25 +253,41 @@ function renderResults() {
 }
 
 function resultRow(item, active) {
-  const btn = document.createElement("button");
-  btn.className = "row" + (active ? " active" : "");
+  const wrap = document.createElement("div");
+  wrap.className = "row" + (active ? " active" : "");
   const loc = item.stock ? primaryLoc(item.stock) : null;
   const qty = item.stock ? itemQty(item.stock) : 0;
   const low = state.config && qty > 0 && qty <= (state.config.ui?.lowStockQty || 5);
-  btn.innerHTML = `
-    <span class="tick" style="background:${item.color || colorFor(item.category)}"></span>
-    <span>
-      <div class="name">${esc(item.name)}</div>
-      <div class="meta">${esc([item.mpn, item.package, item.brand, item.category].filter(Boolean).join(" · "))}</div>
-    </span>
+  const tick = document.createElement("span");
+  tick.className = "tick";
+  tick.style.background = item.color || colorFor(item.category);
+  const main = document.createElement("button");
+  main.type = "button";
+  main.className = "row-main";
+  main.innerHTML = `
+    <div class="name">${esc(item.name)}</div>
+    <div class="meta">${esc([item.mpn, item.package, item.brand, item.category].filter(Boolean).join(" · "))}</div>
     <span class="badges">
-      ${loc ? `<span class="badge stock">${esc(loc.cell || cellLabel(loc.row, loc.col))}</span>` : ""}
-      ${qty ? `<span class="qty">${qty}</span>` : ""}
+      ${loc ? `<span class="badge stock">${esc(locCell(loc))}</span>` : ""}
       ${low ? `<span class="badge low">low</span>` : ""}
       ${item.source && item.source !== "stock" ? `<span class="badge">${esc(item.source)}</span>` : ""}
     </span>`;
-  btn.addEventListener("click", () => selectPart(item));
-  return btn;
+  main.addEventListener("click", () => selectPart(item));
+  wrap.append(tick, main);
+  if (item.stock && loc) {
+    const step = document.createElement("div");
+    step.className = "row-step";
+    step.innerHTML = `<button type="button" data-d="-1" aria-label="Take one">−</button><span class="qty">${qty}</span><button type="button" data-d="1" aria-label="Put one">+</button>`;
+    step.addEventListener("click", (e) => {
+      const d = Number(e.target.dataset.d);
+      if (!d) return;
+      e.preventDefault();
+      e.stopPropagation();
+      quickAdjust(item, d);
+    });
+    wrap.appendChild(step);
+  }
+  return wrap;
 }
 
 function esc(s) {
@@ -282,11 +345,16 @@ function openSheet() {
       <div class="num"><input id="qty" type="number" min="0" inputmode="numeric" value="${qty}" /></div>
       <button id="inc">+</button>
     </div>
+    <div class="nudge-row">
+      <button type="button" data-d="-5">−5</button>
+      <button type="button" data-d="-1">−1</button>
+      <button type="button" data-d="1">+1</button>
+      <button type="button" data-d="5">+5</button>
+    </div>
     <div class="actions">
       <button class="solid" id="btnLocate">${cell ? "Light " + cell.cell : "No empty bin"}</button>
-      <button class="ghost" id="btnPut">${stock ? "Save qty" : "Put in " + (cell ? cell.cell : "…")}</button>
+      <button class="ghost" id="btnPut">${stock ? "Done" : "Put in " + (cell ? cell.cell : "…")}</button>
       ${stock ? `<button class="danger" id="btnEmpty">Empty</button>` : ""}
-      ${stock ? `<button class="ghost" id="btnMove">Move</button>` : ""}
     </div>
     <div class="mini-grid" id="mini"></div>
     <div class="help">${stock ? "Hold +/− to count faster. Type a number to jump." : "Pick a bin, set how many you put in, done."}</div>
@@ -307,12 +375,13 @@ function openSheet() {
   $("#dec").onclick = () => nudge(-1);
   holdRepeat($("#inc"), () => nudge(1));
   holdRepeat($("#dec"), () => nudge(-1));
+  card.querySelectorAll(".nudge-row [data-d]").forEach((b) => {
+    b.onclick = () => nudge(Number(b.dataset.d));
+  });
   $("#btnLocate").onclick = () => cell && locate(cell.row, cell.col);
-  $("#btnPut").onclick = () => commitQty();
+  $("#btnPut").onclick = () => { if (stock) closeSheet(); else commitQty(); };
   const empty = $("#btnEmpty");
   if (empty) empty.onclick = () => clearCell();
-  const mv = $("#btnMove");
-  if (mv) mv.onclick = () => toast("Tap a destination bin on the mini-grid");
   $("#qty").addEventListener("change", () => commitQty(true));
   paintMini();
   try { navigator.vibrate?.(8); } catch {}
@@ -344,7 +413,8 @@ function paintMini() {
               from: cellLabel(primaryLoc(stock).row, primaryLoc(stock).col),
               to: cellLabel(r, c),
             });
-            await refreshAll();
+            touchDirty();
+            await refreshInventory();
             state.selected.stock = findStockMatch(state.selected);
           } catch (e) { toast(e.message); }
         }
@@ -372,6 +442,27 @@ function holdRepeat(el, fn) {
   el.addEventListener("pointerleave", stop);
 }
 
+async function quickAdjust(item, delta) {
+  const loc = primaryLoc(item.stock || item);
+  if (!loc) {
+    selectPart(item);
+    return;
+  }
+  const cell = locCell(loc);
+  const next = Math.max(0, (loc.qty || 0) + delta);
+  applyLocalQty(cell, next);
+  state.lastUndo = { cell, delta: -delta };
+  locate(loc.row, loc.col);
+  touchDirty();
+  try {
+    const res = await api.send("/api/stock/adjust", "POST", { cell, delta });
+    applyLocalQty(cell, res.qty);
+  } catch (e) {
+    toast(e.message);
+    refreshInventory().catch(() => {});
+  }
+}
+
 async function nudge(delta) {
   const input = $("#qty");
   if (!input) return;
@@ -380,13 +471,16 @@ async function nudge(delta) {
   const stock = state.selected?.stock;
   const cell = state.placeCell;
   if (stock && cell) {
+    applyLocalQty(cell.cell, next);
+    state.lastUndo = { cell: cell.cell, delta: -delta };
+    touchDirty();
     try {
       const res = await api.send("/api/stock/adjust", "POST", { cell: cell.cell, delta });
-      input.value = String(res.qty);
-      await refreshAll();
-      state.selected.stock = findStockMatch(state.selected) || state.selected.stock;
-      state.lastUndo = { cell: cell.cell, delta: -delta };
-    } catch (e) { toast(e.message); }
+      applyLocalQty(cell.cell, res.qty);
+    } catch (e) {
+      toast(e.message);
+      refreshInventory().catch(() => {});
+    }
   } else if (!stock && cell && next > 0) {
     await commitQty(true);
   }
@@ -414,9 +508,15 @@ async function commitQty(fromInput) {
         qty,
       });
     }
-    await refreshAll();
+    touchDirty();
+    await refreshInventory();
     state.selected.stock = findStockMatch(item);
-    if (fromInput) return;
+    if (fromInput) {
+      const input = $("#qty");
+      if (input) input.value = String(qty);
+      paintMini();
+      return;
+    }
     toast(`${item.name} → ${cell.cell}`);
     openSheet();
   } catch (e) { toast(e.message); }
@@ -425,10 +525,10 @@ async function commitQty(fromInput) {
 async function clearCell() {
   const cell = state.placeCell;
   if (!cell) return;
-  if (!confirm(`Empty ${cell.cell}?`)) return;
   try {
     await api.send("/api/stock/clear", "POST", { cell: cell.cell });
-    await refreshAll();
+    touchDirty();
+    await refreshInventory();
     closeSheet();
     toast(cell.cell + " emptied");
   } catch (e) { toast(e.message); }
@@ -442,11 +542,10 @@ function closeSheet() {
   if (state.view === "find") $("#q").focus();
 }
 
-async function locate(row, col) {
-  try {
-    await api.send("/api/locate", "POST", { cell: cellLabel(row, col) });
-    if (state.view === "rack") renderGrid(cellLabel(row, col));
-  } catch (e) { toast(e.message); }
+function locate(row, col) {
+  const cell = cellLabel(row, col);
+  fetch("/api/locate?cell=" + encodeURIComponent(cell), { cache: "no-store" }).catch(() => {});
+  if (state.view === "rack") renderGrid(cell);
 }
 
 function renderGrid(lit) {
@@ -546,13 +645,24 @@ function renderSettings() {
       </div>
     </div>
     <div class="card">
+      <h3>Firmware</h3>
+      <p class="help" id="otaSummary"></p>
+      <div class="bar" id="otaMiniBarWrap" hidden><i id="otaMiniBar"></i></div>
+      <div class="row-btns" style="margin-top:12px">
+        <button class="ghost" id="btnOtaCheck">Check GitHub</button>
+        <button class="solid" id="btnOtaInstall" hidden>Install update</button>
+      </div>
+    </div>
+    <div class="card">
       <h3>Data</h3>
       <div class="row-btns">
+        <a class="ghost" href="/api.md" style="text-decoration:none">API docs</a>
+        <a class="ghost" href="/api" style="text-decoration:none">API index</a>
         <a class="ghost" href="/api/backup" style="text-decoration:none">Download backup</a>
         <label class="ghost">Restore<input id="restore" type="file" accept="application/json" hidden /></label>
         <button class="danger" id="btnReset">Factory reset</button>
       </div>
-      <p class="help">Firmware ${state.status.fw || "—"} · heap ${state.status.heap || "—"} · ${state.status.ssid || ""}</p>
+      <p class="help">Firmware ${esc(state.status.fw || "—")} (${esc(state.status.git || "dev")}) · heap ${state.status.heap || "—"} · ${esc(state.status.ssid || "")}</p>
     </div>
   `;
   root.querySelectorAll("[data-k]").forEach((el) => {
@@ -583,6 +693,11 @@ function renderSettings() {
     await api.send("/api/factory-reset", "POST", {});
     await refreshAll();
   };
+  $("#btnOtaCheck").onclick = () => checkOta(true);
+  $("#btnOtaInstall").onclick = () => installOta();
+  paintOta();
+  if (!state.ota) checkOta(false);
+
   $("#restore").onchange = async (e) => {
     const f = e.target.files[0];
     if (!f) return;
@@ -685,6 +800,8 @@ let remoteTimer = 0;
 function onQuery() {
   state.q = $("#q").value;
   state.cursor = 0;
+  const clear = $("#clearQ");
+  if (clear) clear.hidden = !state.q;
   renderResults();
   clearTimeout(remoteTimer);
   const q = state.q.trim();
@@ -708,6 +825,90 @@ async function fetchRemote(q) {
   }
 }
 
+function paintOta() {
+  const ota = state.ota;
+  const summary = $("#otaSummary");
+  const install = $("#btnOtaInstall");
+  const miniWrap = $("#otaMiniBarWrap");
+  const mini = $("#otaMiniBar");
+  const veil = $("#otaVeil");
+  const cur = `${state.status.fw || "—"} · ${state.status.git || "dev"}`;
+  const repo = (ota && ota.repo) || state.status.repo || "neooriginal/ElectronicRack";
+  if (summary) {
+    if (!ota) {
+      summary.textContent = `Running ${cur}. Source ${repo}.`;
+    } else if (ota.available) {
+      summary.textContent = `Running ${cur}. ${ota.latest?.version || ""} (${ota.latest?.git || ""}) is on GitHub.`;
+    } else if (ota.state === "error") {
+      summary.textContent = `Running ${cur}. ${ota.message || "check failed"}`;
+    } else {
+      summary.textContent = `Running ${cur}. ${ota.message || "up to date"} · ${repo}`;
+    }
+  }
+  if (install) install.hidden = !(ota && ota.available) || ota.state === "updating";
+  const updating = ota && (ota.state === "updating" || ota.state === "success");
+  if (miniWrap) miniWrap.hidden = !updating;
+  if (mini && ota) mini.style.width = `${ota.progress || 0}%`;
+  paintSys();
+  if (veil) {
+    veil.hidden = !updating;
+    if (updating) {
+      $("#otaTitle").textContent = ota.state === "success" ? "Rebooting" : "Updating";
+      $("#otaMsg").textContent = (ota.phase ? ota.phase + " · " : "") + (ota.message || "pulling from GitHub");
+      $("#otaBar").style.width = `${ota.progress || 0}%`;
+      $("#otaPct").textContent = `${ota.progress || 0}%`;
+    }
+  }
+}
+
+async function checkOta(toastOn) {
+  try {
+    if (toastOn) await api.send("/api/update/check", "POST", {});
+    const start = Date.now();
+    while (Date.now() - start < 15000) {
+      state.ota = await api.get("/api/update");
+      paintOta();
+      if (!toastOn) break;
+      if (state.ota.state === "checking" || (state.ota.state === "idle" && Date.now() - start < 1200)) {
+        await new Promise((r) => setTimeout(r, 350));
+        continue;
+      }
+      break;
+    }
+    if (toastOn && state.ota?.available) toast("Update " + (state.ota.latest?.git || "") + " ready");
+    else if (toastOn && state.ota?.state === "error") toast(state.ota.message || "check failed");
+    else if (toastOn) toast(state.ota?.message || "up to date");
+  } catch (e) {
+    if (toastOn) toast(e.message);
+  }
+  paintOta();
+}
+
+async function installOta() {
+  if (!confirm("Install the GitHub build? The rack will reboot.")) return;
+  try {
+    await api.send("/api/update/install", "POST", {});
+    const started = Date.now();
+    while (Date.now() - started < 180000) {
+      try {
+        state.ota = await api.get("/api/update");
+      } catch {
+        toast("Device rebooting…");
+        break;
+      }
+      paintOta();
+      if (state.ota.state === "error") {
+        toast(state.ota.message || "update failed");
+        break;
+      }
+      if (state.ota.state === "success") break;
+      await new Promise((r) => setTimeout(r, 800));
+    }
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
 function connectWs() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   let ws;
@@ -720,10 +921,15 @@ function connectWs() {
         state.status = msg;
         paintSys();
       } else if (msg.t === "dirty") {
-        refreshAll().catch(() => {});
+        if (Date.now() < state.ignoreDirtyUntil) return;
+        if (msg.what === "inventory") refreshInventory().catch(() => {});
+        else refreshAll().catch(() => {});
       } else if (msg.t === "walk") {
         state._walkCell = msg.cell;
         if (state.view === "rack") renderGrid(msg.cell);
+      } else if (msg.t === "ota") {
+        state.ota = msg;
+        paintOta();
       }
     };
     ws.onclose = () => setTimeout(open, 1500);
@@ -742,6 +948,11 @@ function bind() {
       const item = (state._flat || [])[state.cursor] || makeCustom(state.q);
       if (item) selectPart(item);
     }
+  });
+  $("#clearQ")?.addEventListener("click", () => {
+    $("#q").value = "";
+    onQuery();
+    $("#q").focus();
   });
   $("#btnIdle")?.addEventListener("click", () => api.send("/api/leds", "POST", { mode: "idle" }));
   document.addEventListener("keydown", (e) => {

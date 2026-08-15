@@ -27,6 +27,7 @@
         <button class="tab" data-view="settings">Setup</button>
       </nav>
       <div class="sys" id="sys">
+        <button type="button" class="ota-chip" id="otaChip" hidden>update</button>
         <span class="pip" id="linkPip"></span>
         <span id="sysText">connecting</span>
       </div>
@@ -39,6 +40,7 @@
             <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79L20 21.5 21.5 20l-6-6zM9.5 14C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
             <input id="q" type="search" enterkeyhint="search" autocomplete="off" spellcheck="false"
               placeholder="10k, 100n, ESP32, flux, C8734…" />
+            <button type="button" class="clear-q" id="clearQ" hidden aria-label="Clear search">✕</button>
             <kbd class="hint">/</kbd>
           </label>
           <div class="chips" id="chips"></div>
@@ -70,6 +72,15 @@
   </aside>
 
   <div class="toast" id="toast" hidden></div>
+  <div class="ota-veil" id="otaVeil" hidden>
+    <div class="ota-card">
+      <div class="kicker">OTA</div>
+      <h2 id="otaTitle">Updating</h2>
+      <p id="otaMsg">Pulling from GitHub…</p>
+      <div class="bar"><i id="otaBar"></i></div>
+      <div class="ota-pct" id="otaPct">0%</div>
+    </div>
+  </div>
 
   <script type="module" src="/app.js"></script>
 </body>

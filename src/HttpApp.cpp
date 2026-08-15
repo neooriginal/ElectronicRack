@@ -16,6 +16,7 @@ AsyncWebSocket ws("/ws");
 void sendJson(AsyncWebServerRequest* req, int code, const JsonDocument& doc) {
   AsyncResponseStream* res = req->beginResponseStream("application/json");
   res->setCode(code);
+  res->addHeader("Cache-Control", "no-store");
   serializeJson(doc, *res);
   req->send(res);
 }
@@ -47,6 +48,8 @@ bool readCell(App* app, JsonVariantConst v, uint8_t& row, uint8_t& col) {
 void fillStatus(App* app, JsonDocument& doc) {
   doc["ok"] = true;
   doc["fw"] = FW_VERSION;
+  doc["git"] = FW_GIT;
+  doc["repo"] = GITHUB_REPO;
   doc["name"] = FW_NAME;
   doc["ip"] = app->wifi.ip();
   doc["ssid"] = app->wifi.ssid();
@@ -98,6 +101,89 @@ void fillConfig(App* app, JsonDocument& doc) {
       cell["led"] = app->rack.ledFor(r, c);
     }
   }
+}
+
+void writeItem(JsonObject o, const Item& item) {
+  o["id"] = item.id;
+  o["name"] = item.name;
+  o["mpn"] = item.mpn;
+  o["sku"] = item.sku;
+  o["category"] = item.category;
+  o["package"] = item.pkg;
+  o["brand"] = item.brand;
+  o["notes"] = item.notes;
+  o["source"] = item.source;
+  o["color"] = hexColor(item.color);
+  JsonArray locs = o["locs"].to<JsonArray>();
+  int32_t total = 0;
+  for (const auto& loc : item.locs) {
+    JsonObject l = locs.add<JsonObject>();
+    l["row"] = loc.row;
+    l["col"] = loc.col;
+    l["cell"] = cellLabel(loc.row, loc.col);
+    l["qty"] = loc.qty;
+    total += loc.qty;
+  }
+  o["qty"] = total;
+}
+
+bool itemMatches(const Item& item, const String& raw) {
+  String q = raw;
+  q.trim();
+  q.toLowerCase();
+  if (!q.length()) return true;
+  auto has = [&](const String& s) {
+    String t = s;
+    t.toLowerCase();
+    return t.indexOf(q) >= 0;
+  };
+  if (has(item.name) || has(item.mpn) || has(item.sku) || has(item.category) || has(item.pkg) ||
+      has(item.brand) || has(item.notes))
+    return true;
+  for (const auto& loc : item.locs) {
+    if (has(cellLabel(loc.row, loc.col))) return true;
+  }
+  return false;
+}
+
+bool cellFromReq(App* app, AsyncWebServerRequest* req, uint8_t& row, uint8_t& col) {
+  if (req->hasParam("cell")) {
+    return app->rack.parseLabel(req->getParam("cell")->value(), row, col);
+  }
+  if (req->hasParam("row") && req->hasParam("col")) {
+    row = static_cast<uint8_t>(req->getParam("row")->value().toInt());
+    col = static_cast<uint8_t>(req->getParam("col")->value().toInt());
+    return app->rack.inBounds(row, col);
+  }
+  return false;
+}
+
+int32_t nFromReq(AsyncWebServerRequest* req, int32_t fallback = 1) {
+  if (!req->hasParam("n")) return fallback;
+  int32_t n = req->getParam("n")->value().toInt();
+  if (n < 1) n = 1;
+  return n;
+}
+
+void fillBin(App* app, uint8_t row, uint8_t col, JsonDocument& doc) {
+  doc["ok"] = true;
+  doc["cell"] = app->rack.label(row, col);
+  doc["row"] = row;
+  doc["col"] = col;
+  doc["led"] = app->rack.ledFor(row, col);
+  const Item* item = app->inventory.findByCell(row, col);
+  if (!item) {
+    doc["empty"] = true;
+    doc["qty"] = 0;
+    return;
+  }
+  doc["empty"] = false;
+  writeItem(doc["item"].to<JsonObject>(), *item);
+  int32_t qty = 0;
+  for (const auto& loc : item->locs) {
+    if (loc.row == row && loc.col == col) qty = loc.qty;
+  }
+  doc["qty"] = qty;
 }
 
 void protoFromJson(Item& item, JsonVariantConst v) {
@@ -234,6 +320,163 @@ void HttpApp::notifyWalk(uint8_t row, uint8_t col, int led) {
 }
 
 void HttpApp::registerRoutes() {
+  server.on("/api", HTTP_GET, [this](AsyncWebServerRequest* req) {
+    JsonDocument doc;
+    doc["name"] = FW_NAME;
+    doc["fw"] = FW_VERSION;
+    doc["git"] = FW_GIT;
+    doc["docs"] = "/api.md";
+    doc["port"] = HTTP_PORT;
+    JsonArray r = doc["routes"].to<JsonArray>();
+    const char* routes[] = {
+        "GET /api",
+        "GET /api/bootstrap",
+        "GET /api/status",
+        "GET /api/config",
+        "PUT /api/config",
+        "GET /api/inventory",
+        "PUT /api/inventory",
+        "GET /api/find?q=",
+        "GET /api/bin?cell=A1",
+        "GET /api/locate?cell=A1",
+        "GET /api/add?cell=A1&n=1",
+        "GET /api/take?cell=A1&n=1",
+        "POST /api/stock/place",
+        "POST /api/stock/adjust",
+        "POST /api/stock/set",
+        "POST /api/stock/clear",
+        "POST /api/stock/move",
+        "POST /api/locate",
+        "POST /api/leds",
+        "GET /api/catalog/remote?q=",
+        "GET /api/backup",
+        "POST /api/restore",
+        "GET /api/update",
+        "POST /api/update/check",
+        "POST /api/update/install",
+        "WS /ws",
+    };
+    for (const char* s : routes) r.add(s);
+    sendJson(req, 200, doc);
+  });
+
+  server.on("/api/bootstrap", HTTP_GET, [this](AsyncWebServerRequest* req) {
+    JsonDocument doc;
+    app_->lock();
+    fillStatus(app_, doc);
+    JsonDocument cfg;
+    fillConfig(app_, cfg);
+    doc["config"] = cfg.as<JsonVariantConst>();
+    JsonDocument inv;
+    app_->inventory.toJson(inv);
+    doc["inventory"] = inv.as<JsonVariantConst>();
+    app_->unlock();
+    sendJson(req, 200, doc);
+  });
+
+  server.on("/api/find", HTTP_GET, [this](AsyncWebServerRequest* req) {
+    const String q = req->hasParam("q") ? req->getParam("q")->value() : "";
+    JsonDocument doc;
+    doc["q"] = q;
+    JsonArray items = doc["items"].to<JsonArray>();
+    app_->lock();
+    for (const auto& item : app_->inventory.items()) {
+      if (itemMatches(item, q)) writeItem(items.add<JsonObject>(), item);
+    }
+    app_->unlock();
+    doc["count"] = items.size();
+    sendJson(req, 200, doc);
+  });
+
+  server.on("/api/bin", HTTP_GET, [this](AsyncWebServerRequest* req) {
+    uint8_t row = 0, col = 0;
+    if (!cellFromReq(app_, req, row, col)) {
+      sendErr(req, 400, "cell required");
+      return;
+    }
+    JsonDocument doc;
+    app_->lock();
+    fillBin(app_, row, col, doc);
+    app_->unlock();
+    sendJson(req, 200, doc);
+  });
+
+  server.on("/api/locate", HTTP_GET, [this](AsyncWebServerRequest* req) {
+    uint8_t row = 0, col = 0;
+    if (!cellFromReq(app_, req, row, col)) {
+      sendErr(req, 400, "cell required");
+      return;
+    }
+    app_->leds.locate(row, col);
+    JsonDocument out;
+    out["ok"] = true;
+    out["cell"] = app_->rack.label(row, col);
+    out["led"] = app_->rack.ledFor(row, col);
+    sendJson(req, 200, out);
+  });
+
+  server.on("/api/add", HTTP_GET, [this](AsyncWebServerRequest* req) {
+    uint8_t row = 0, col = 0;
+    if (!cellFromReq(app_, req, row, col)) {
+      sendErr(req, 400, "cell required");
+      return;
+    }
+    int32_t qty = 0;
+    app_->lock();
+    const bool ok = app_->inventory.adjust(row, col, nFromReq(req), qty);
+    if (ok) {
+      app_->markInventoryDirty();
+      app_->refreshStockLights();
+      app_->leds.flash(row, col, 0x3DDC84, 420);
+    }
+    app_->unlock();
+    if (!ok) {
+      sendErr(req, 404, "empty cell");
+      return;
+    }
+    notifyDirty("inventory");
+    JsonDocument out;
+    out["ok"] = true;
+    out["qty"] = qty;
+    out["cell"] = app_->rack.label(row, col);
+    sendJson(req, 200, out);
+  });
+
+  server.on("/api/take", HTTP_GET, [this](AsyncWebServerRequest* req) {
+    uint8_t row = 0, col = 0;
+    if (!cellFromReq(app_, req, row, col)) {
+      sendErr(req, 400, "cell required");
+      return;
+    }
+    int32_t qty = 0;
+    app_->lock();
+    const bool ok = app_->inventory.adjust(row, col, -nFromReq(req), qty);
+    if (ok) {
+      app_->markInventoryDirty();
+      app_->refreshStockLights();
+      app_->leds.flash(row, col, 0xF5A524, 420);
+    }
+    app_->unlock();
+    if (!ok) {
+      sendErr(req, 404, "empty cell");
+      return;
+    }
+    notifyDirty("inventory");
+    JsonDocument out;
+    out["ok"] = true;
+    out["qty"] = qty;
+    out["cell"] = app_->rack.label(row, col);
+    sendJson(req, 200, out);
+  });
+
+  server.on("/api.md", HTTP_GET, [](AsyncWebServerRequest* req) {
+    if (LittleFS.exists("/api.md")) {
+      req->send(LittleFS, "/api.md", "text/markdown; charset=utf-8");
+      return;
+    }
+    req->send(404, "text/plain", "docs missing");
+  });
+
   server.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
     JsonDocument doc;
     fillStatus(app_, doc);
@@ -325,7 +568,7 @@ void HttpApp::registerRoutes() {
         const int32_t qty = doc["qty"] | 1;
         app_->lock();
         Item* item = app_->inventory.place(proto, row, col, qty);
-        app_->saveInventory();
+        app_->markInventoryDirty();
         app_->refreshStockLights();
         if (item && app_->config.locateOnSelect) app_->leds.locate(row, col);
         JsonDocument out;
@@ -363,7 +606,7 @@ void HttpApp::registerRoutes() {
         app_->lock();
         const bool ok = app_->inventory.adjust(row, col, delta, qty);
         if (ok) {
-          app_->saveInventory();
+          app_->markInventoryDirty();
           app_->refreshStockLights();
           app_->leds.flash(row, col, delta >= 0 ? 0x3DDC84 : 0xF5A524, 420);
         }
@@ -398,7 +641,7 @@ void HttpApp::registerRoutes() {
         app_->lock();
         const bool ok = app_->inventory.setQty(row, col, doc["qty"] | 0, qty);
         if (ok) {
-          app_->saveInventory();
+          app_->markInventoryDirty();
           app_->refreshStockLights();
         }
         app_->unlock();
@@ -430,7 +673,7 @@ void HttpApp::registerRoutes() {
         app_->lock();
         const bool ok = app_->inventory.clearCell(row, col);
         if (ok) {
-          app_->saveInventory();
+          app_->markInventoryDirty();
           app_->refreshStockLights();
         }
         app_->unlock();
@@ -465,7 +708,7 @@ void HttpApp::registerRoutes() {
         app_->lock();
         const bool ok = app_->inventory.move(fr, fc, tr, tc);
         if (ok) {
-          app_->saveInventory();
+          app_->markInventoryDirty();
           app_->refreshStockLights();
           if (app_->config.locateOnSelect) app_->leds.locate(tr, tc);
         }
@@ -604,6 +847,38 @@ void HttpApp::registerRoutes() {
         sendOk(req);
       },
       nullptr, onBody);
+
+  server.on("/api/update", HTTP_GET, [this](AsyncWebServerRequest* req) {
+    JsonDocument doc;
+    app_->ota.toJson(doc);
+    sendJson(req, 200, doc);
+  });
+
+  server.on("/api/update/check", HTTP_POST, [this](AsyncWebServerRequest* req) {
+    if (app_->ota.busy()) {
+      sendErr(req, 409, "update busy");
+      return;
+    }
+    app_->ota.requestCheck();
+    JsonDocument doc;
+    app_->ota.toJson(doc);
+    sendJson(req, 202, doc);
+  });
+
+  server.on("/api/update/install", HTTP_POST, [this](AsyncWebServerRequest* req) {
+    if (app_->wifi.apMode() || !app_->wifi.connected()) {
+      sendErr(req, 409, "need station wifi");
+      return;
+    }
+    if (app_->ota.state() == OtaUpdate::State::Updating) {
+      sendErr(req, 409, "update busy");
+      return;
+    }
+    app_->ota.requestInstall();
+    JsonDocument doc;
+    app_->ota.toJson(doc);
+    sendJson(req, 202, doc);
+  });
 
   server.on("/api/factory-reset", HTTP_POST, [this](AsyncWebServerRequest* req) {
     app_->lock();

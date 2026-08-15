@@ -150,6 +150,18 @@ class Handler(SimpleHTTPRequestHandler):
             return {}
         return json.loads(self.rfile.read(n).decode())
 
+    def _quick_adjust(self, qs, sign):
+        cell = (qs.get("cell") or [""])[0]
+        n = int((qs.get("n") or ["1"])[0] or 1)
+        cfg = load_json(CFG_PATH, DEFAULT_CFG)
+        inv = load_json(INV_PATH, {"version": 1, "items": []})
+        try:
+            qty = adjust(inv, cfg, cell, sign * max(1, n))
+        except Exception:
+            return self._json(404, {"error": "empty cell"})
+        save_json(INV_PATH, inv)
+        return self._json(200, {"ok": True, "qty": qty, "cell": cell})
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -159,12 +171,59 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path == "/api":
+            return self._json(200, {
+                "name": "ElectronicRack", "fw": "dev", "docs": "/api.md", "port": 8080,
+                "routes": [
+                    "GET /api", "GET /api/bootstrap", "GET /api/find?q=", "GET /api/bin?cell=A1",
+                    "GET /api/locate?cell=A1", "GET /api/add?cell=A1&n=1", "GET /api/take?cell=A1&n=1",
+                ],
+            })
+        if u.path == "/api/bootstrap":
+            with lock:
+                cfg = fill_map(load_json(CFG_PATH, DEFAULT_CFG))
+                inv = load_json(INV_PATH, {"version": 1, "items": []})
+            return self._json(200, {
+                "ok": True, "fw": "dev", "git": "dev", "repo": "neooriginal/ElectronicRack",
+                "name": "ElectronicRack", "ip": "127.0.0.1", "ssid": "dev", "ap": False,
+                "heap": 200000, "config": cfg, "inventory": inv,
+            })
+        if u.path == "/api/find":
+            q = parse_qs(u.query).get("q", [""])[0].lower()
+            inv = load_json(INV_PATH, {"version": 1, "items": []})
+            items = []
+            for item in inv.get("items", []):
+                blob = " ".join(str(item.get(k, "")) for k in ("name", "mpn", "sku", "category", "package", "brand")).lower()
+                if not q or q in blob:
+                    items.append(item)
+            return self._json(200, {"q": q, "items": items, "count": len(items)})
+        if u.path == "/api/bin":
+            cell = parse_qs(u.query).get("cell", [""])[0]
+            cfg = load_json(CFG_PATH, DEFAULT_CFG)
+            inv = load_json(INV_PATH, {"version": 1, "items": []})
+            try:
+                r, c = parse_cell(cell, cfg["rows"], cfg["cols"])
+            except Exception:
+                return self._json(400, {"error": "cell required"})
+            item, loc = find_at(inv, r, c)
+            return self._json(200, {
+                "ok": True, "cell": cell, "row": r, "col": c, "empty": not item,
+                "qty": loc["qty"] if loc else 0, "item": item,
+            })
+        if u.path == "/api/locate":
+            print("[led] locate", parse_qs(u.query).get("cell", [""])[0])
+            return self._json(200, {"ok": True, "cell": parse_qs(u.query).get("cell", [""])[0]})
+        if u.path == "/api/add":
+            return self._quick_adjust(parse_qs(u.query), 1)
+        if u.path == "/api/take":
+            return self._quick_adjust(parse_qs(u.query), -1)
         if u.path == "/api/status":
             return self._json(200, {
                 "ok": True, "fw": "dev", "name": "ElectronicRack",
                 "ip": "127.0.0.1", "ssid": "dev", "rssi": 0, "mac": "00:00:00:00:00:00",
                 "ap": False, "heap": 200000, "uptime": 0, "ledMode": 1,
                 "cells": 36, "items": len(load_json(INV_PATH, {"items": []})["items"]),
+                "git": "dev", "repo": "neooriginal/ElectronicRack",
             })
         if u.path == "/api/config":
             with lock:
@@ -183,6 +242,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(200, remote_search(q))
         if u.path == "/api/calibrate/walk-step":
             return self._json(200, {"active": False})
+        if u.path == "/api/update":
+            return self._json(200, ota_status())
         return super().do_GET()
 
     def do_PUT(self):
@@ -244,6 +305,10 @@ class Handler(SimpleHTTPRequestHandler):
                 save_json(CFG_PATH, DEFAULT_CFG)
                 save_json(INV_PATH, {"version": 1, "items": []})
                 return self._json(200, {"ok": True})
+            if u.path == "/api/update/check":
+                return self._json(202, ota_status(refresh=True))
+            if u.path == "/api/update/install":
+                return self._json(409, {"error": "OTA only runs on the ESP32"})
         self._json(404, {"error": "not found"})
 
 
@@ -296,7 +361,9 @@ def adjust(inv, cfg, cell, delta):
         item["locs"] = [l for l in item["locs"] if l is not loc]
         if not item["locs"]:
             inv["items"] = [i for i in inv["items"] if i is not item]
-    return loc["qty"] if loc["qty"] else 0
+            return 0
+    item["qty"] = sum(l["qty"] for l in item["locs"])
+    return loc["qty"]
 
 
 def set_qty(inv, cfg, cell, qty):
@@ -325,6 +392,37 @@ def move(inv, cfg, src, dst):
         raise ValueError("empty")
     tr, tc = parse_cell(dst, cfg["rows"], cfg["cols"])
     loc["row"], loc["col"], loc["cell"] = tr, tc, cell_label(tr, tc)
+
+
+_ota_cache = None
+
+
+def ota_status(refresh: bool = False):
+    global _ota_cache
+    if refresh or _ota_cache is None:
+        latest = {"version": "", "git": "", "built": ""}
+        err = ""
+        try:
+            req = Request(
+                "https://github.com/neooriginal/ElectronicRack/releases/latest/download/version.json",
+                headers={"User-Agent": "ElectronicRack-dev/1.0", "Accept": "application/json"},
+            )
+            with urlopen(req, timeout=8) as resp:
+                latest = json.loads(resp.read().decode())
+        except Exception as exc:
+            err = str(exc)
+        git = latest.get("git") or ""
+        _ota_cache = {
+            "state": "error" if err and not git else ("ready" if git and git != "dev" else "idle"),
+            "message": err or ("update available" if git and git != "dev" else "desktop preview"),
+            "progress": 0,
+            "phase": "",
+            "repo": "neooriginal/ElectronicRack",
+            "current": {"version": "dev", "git": "dev"},
+            "latest": {"version": latest.get("version", ""), "git": git, "built": latest.get("built", "")},
+            "available": bool(git and git != "dev"),
+        }
+    return _ota_cache
 
 
 def remote_search(q: str):

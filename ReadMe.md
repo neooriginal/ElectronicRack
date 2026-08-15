@@ -12,6 +12,8 @@ ESP32 firmware + web UI for a NeoPixel-backed component organizer. Default layou
 - Expandable grid, LED pin / count / color order, wiring math, per-bin LED overrides
 - Startup + idle animations, locate pulse, calibration corners, walk, tap-to-map
 - Backup / restore JSON from the UI
+- GitHub Actions builds firmware on every commit and publishes a rolling `latest` release
+- In-app OTA pulls `firmware.bin` + `littlefs.bin` from that release (`neooriginal/ElectronicRack`)
 
 Wi-Fi is the only compile-time setting. Everything else is in the web UI.
 
@@ -46,6 +48,8 @@ pio device monitor
 The filesystem image is the UI (`data/`). Re-upload it whenever you change HTML/CSS/JS.
 
 Then open `http://rack.local:8080` or `http://<ip>:8080`.
+
+This USB flash is required **once** after the dual-OTA partition table change. Later updates install from **Setup → Firmware**.
 
 ## First-run calibration
 
@@ -96,6 +100,20 @@ scripts/     named-part generator, desktop API, PlatformIO pre-script
 
 Firmware is split so the LED engine, inventory, and HTTP API can change independently. The browser owns search ranking so the ESP32 stays snappy.
 
+## API
+
+Full reference: **[docs/API.md](docs/API.md)** (also served on the device as `/api.md`).
+
+Quick GET API — one URL, no body:
+
+```bash
+curl http://rack.local:8080/api/find?q=10k
+curl http://rack.local:8080/api/locate?cell=A3
+curl 'http://rack.local:8080/api/add?cell=A3&n=5'
+```
+
+`GET /api` lists every route. `GET /api/bootstrap` is status + config + inventory in one request.
+
 ## API (short)
 
 | Method | Path | Purpose |
@@ -109,5 +127,24 @@ Firmware is split so the LED engine, inventory, and HTTP API can change independ
 | POST | `/api/leds` | `idle` / `corners` / `walk` / `identify` / `startup` / `off` |
 | GET | `/api/catalog/remote?q=` | JLCPCB / LCSC proxy |
 | GET/POST | `/api/backup` `/api/restore` | Snapshot |
+| GET | `/api/update` | Current vs GitHub latest |
+| POST | `/api/update/check` | Fetch `version.json` from the rolling release |
+| POST | `/api/update/install` | Flash LittleFS then firmware, reboot |
 
-WebSocket `/ws` pushes `status`, `dirty`, and walk highlights.
+WebSocket `/ws` pushes `status`, `dirty`, walk highlights, and `ota` progress.
+
+## Firmware updates
+
+Every push to `main` builds with PlatformIO and replaces the GitHub Release tagged **`latest`**:
+
+- `firmware.bin`
+- `littlefs.bin` (web UI)
+- `version.json` (`version`, `git`, `built`)
+
+The device is hardcoded to `neooriginal/ElectronicRack`. About 4 seconds after Wi-Fi comes up it checks:
+
+`https://github.com/neooriginal/ElectronicRack/releases/latest/download/version.json`
+
+If the git hash differs, Setup → Firmware shows **Install update**. That pulls the two `.bin` files from the same release over HTTPS and reboots.
+
+USB flash this build once (partition table changed to dual-OTA). After that, OTA is enough.

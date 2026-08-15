@@ -4,9 +4,18 @@
 // Runtime settings (grid, wiring, LEDs, animations) live in LittleFS /config.json.
 
 #define FW_VERSION        "1.0.0"
+#ifndef FW_GIT
+#define FW_GIT            "dev"
+#endif
 #define FW_NAME           "ElectronicRack"
 #define MDNS_HOSTNAME     "rack"
 #define HTTP_PORT         8080
+
+// Rolling GitHub Release used by OTA. Assets: firmware.bin, littlefs.bin, version.json
+#define GITHUB_REPO       "neooriginal/ElectronicRack"
+#define OTA_VERSION_URL   "https://github.com/" GITHUB_REPO "/releases/latest/download/version.json"
+#define OTA_FIRMWARE_URL  "https://github.com/" GITHUB_REPO "/releases/latest/download/firmware.bin"
+#define OTA_FS_URL        "https://github.com/" GITHUB_REPO "/releases/latest/download/littlefs.bin"
 
 #define MAX_ROWS          16
 #define MAX_COLS          16

@@ -8,6 +8,7 @@
 #include "HttpApp.h"
 #include "Inventory.h"
 #include "LedEngine.h"
+#include "OtaUpdate.h"
 #include "Rack.h"
 #include "Store.h"
 #include "Types.h"
@@ -22,6 +23,7 @@ public:
   WifiStation wifi;
   CatalogProxy catalog;
   HttpApp http;
+  OtaUpdate ota;
   AppConfig config;
 
   void begin();
@@ -32,12 +34,16 @@ public:
 
   bool saveConfig();
   bool saveInventory();
+  void markInventoryDirty();
+  void flushInventory();
   void applyConfig(bool rebuildLeds);
   void refreshStockLights();
   bool mergeConfig(JsonVariantConst src, bool& rebuildLeds);
 
 private:
   SemaphoreHandle_t mux_ = nullptr;
+  bool inventoryDirty_ = false;
+  uint32_t inventoryDirtyAt_ = 0;
 };
 
 extern App app;

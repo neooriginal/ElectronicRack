@@ -47,7 +47,7 @@ void App::begin() {
   mux_ = xSemaphoreCreateMutex();
   Serial.begin(115200);
   delay(200);
-  Serial.printf("\n" FW_NAME " " FW_VERSION "\n");
+  Serial.printf("\n" FW_NAME " " FW_VERSION " (%s)\n", FW_GIT);
 
   if (!store.begin()) {
     Serial.println("[app] filesystem unavailable — running with defaults");
@@ -67,12 +67,15 @@ void App::begin() {
 
   wifi.begin([this]() { leds.loop(); });
   http.begin(this);
+  ota.begin([this](const char* json) { http.broadcast(json); });
 }
 
 void App::loop() {
   wifi.loop();
   leds.loop();
   http.loop();
+  ota.loop();
+  if (inventoryDirty_ && millis() - inventoryDirtyAt_ >= 450) flushInventory();
 }
 
 void App::lock() {
@@ -90,7 +93,18 @@ bool App::saveConfig() {
 }
 
 bool App::saveInventory() {
+  inventoryDirty_ = false;
   return inventory.save(store);
+}
+
+void App::markInventoryDirty() {
+  inventoryDirty_ = true;
+  inventoryDirtyAt_ = millis();
+}
+
+void App::flushInventory() {
+  if (!inventoryDirty_) return;
+  saveInventory();
 }
 
 void App::applyConfig(bool rebuildLeds) {
