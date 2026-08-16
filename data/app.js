@@ -76,11 +76,42 @@ function occupiedMap() {
   return m;
 }
 
+function defaultConfig() {
+  return {
+    rackName: "Bench Rack",
+    rows: 6,
+    cols: 6,
+    leds: {
+      pin: 13, count: 36, order: "GRB", brightness: 72, idleBrightness: 18,
+      locateColor: "#3DD6E0", idleAnim: "breathe", startupAnim: "cascade",
+    },
+    wiring: { origin: "top-left", rowFirst: true, serpentine: true, offset: 0 },
+    overrides: {},
+    ui: { locateOnSelect: true, remoteSearch: true, lowStockQty: 5 },
+  };
+}
+
+function normalizeConfig(cfg) {
+  const base = defaultConfig();
+  if (!cfg || typeof cfg !== "object" || cfg.rows == null || cfg.cols == null) return base;
+  return {
+    ...base,
+    ...cfg,
+    leds: { ...base.leds, ...(cfg.leds || {}) },
+    wiring: { ...base.wiring, ...(cfg.wiring || {}) },
+    ui: { ...base.ui, ...(cfg.ui || {}) },
+    overrides: cfg.overrides || {},
+  };
+}
+
 function firstEmpty() {
-  if (!state.config) return null;
+  const cfg = state.config;
+  if (!cfg) return null;
   const occ = occupiedMap();
-  for (let r = 0; r < state.config.rows; r++) {
-    for (let c = 0; c < state.config.cols; c++) {
+  const rows = cfg.rows || 0;
+  const cols = cfg.cols || 0;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
       if (!occ.has(`${r},${c}`)) return { row: r, col: c, cell: cellLabel(r, c) };
     }
   }
@@ -121,22 +152,31 @@ function applyLocalQty(cell, qty) {
   if (state.view === "rack") renderGrid();
 }
 
+function configLooksValid(cfg) {
+  return !!(cfg && typeof cfg === "object" && cfg.rows != null && cfg.cols != null);
+}
+
+async function fetchSplitBoot() {
+  const [cfg, inv, st] = await Promise.all([
+    api.get("/api/config"),
+    api.get("/api/inventory"),
+    api.get("/api/status"),
+  ]);
+  return { ...st, config: cfg, inventory: inv };
+}
+
 async function refreshAll() {
   let boot;
   try {
     boot = await api.get("/api/bootstrap");
+    if (!configLooksValid(boot.config)) boot = await fetchSplitBoot();
   } catch {
-    const [cfg, inv, st] = await Promise.all([
-      api.get("/api/config"),
-      api.get("/api/inventory"),
-      api.get("/api/status"),
-    ]);
-    boot = { ...st, config: cfg, inventory: inv };
+    boot = await fetchSplitBoot();
   }
-  state.config = boot.config;
+  state.config = normalizeConfig(boot.config);
   state.inventory = (boot.inventory && boot.inventory.items) || [];
   state.status = boot;
-  $("#rackName").textContent = (boot.config && boot.config.rackName) || "Bench Rack";
+  $("#rackName").textContent = state.config.rackName || "Bench Rack";
   paintSys();
   if (state.view === "find") renderResults();
   if (state.view === "rack") renderGrid();
@@ -352,8 +392,8 @@ function openSheet() {
       <button type="button" data-d="5">+5</button>
     </div>
     <div class="actions">
-      <button class="solid" id="btnLocate">${cell ? "Light " + cell.cell : "No empty bin"}</button>
-      <button class="ghost" id="btnPut">${stock ? "Done" : "Put in " + (cell ? cell.cell : "…")}</button>
+      <button class="solid" id="btnLocate">${cell ? "Light " + cell.cell : "Pick a bin"}</button>
+      <button class="ghost" id="btnPut">${stock ? "Done" : "Put in " + (cell ? cell.cell : "a bin")}</button>
       ${stock ? `<button class="danger" id="btnEmpty">Empty</button>` : ""}
     </div>
     <div class="mini-grid" id="mini"></div>
@@ -488,7 +528,7 @@ async function nudge(delta) {
 
 async function commitQty(fromInput) {
   const cell = state.placeCell;
-  if (!cell) { toast("No bin selected"); return; }
+  if (!cell) { toast("No empty bin — open Grid and tap one, or raise rows/columns in Setup"); return; }
   const qty = Math.max(0, parseInt($("#qty").value, 10) || 0);
   const item = state.selected;
   try {
@@ -550,8 +590,8 @@ function locate(row, col) {
 
 function renderGrid(lit) {
   const g = $("#grid");
-  const cfg = state.config;
-  if (!cfg) return;
+  const cfg = state.config || normalizeConfig(null);
+  if (!state.config) state.config = cfg;
   $("#rackTitle").textContent = `${cfg.cols} × ${cfg.rows}`;
   g.style.gridTemplateColumns = `repeat(${cfg.cols}, minmax(72px, 1fr))`;
   g.innerHTML = "";
@@ -586,8 +626,8 @@ function renderGrid(lit) {
 }
 
 function renderSettings() {
-  const cfg = state.config;
-  if (!cfg) return;
+  const cfg = normalizeConfig(state.config);
+  state.config = cfg;
   const root = $("#settings");
   root.innerHTML = `
     <div class="card">
@@ -731,18 +771,25 @@ function check(key, label, value) {
 
 async function patchFromSettings() {
   const g = (k) => $("#settings [data-k='" + k + "']");
-  const num = (k) => Number(g(k).value);
+  const num = (k, fallback) => {
+    const n = Number(g(k)?.value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const rows = Math.max(1, num("rows", state.config?.rows || 6));
+  const cols = Math.max(1, num("cols", state.config?.cols || 6));
   const oldCells = (state.config?.rows || 0) * (state.config?.cols || 0);
-  if (g("ledCount") && num("ledCount") === oldCells) {
-    g("ledCount").value = String(num("rows") * num("cols"));
+  let ledCount = num("ledCount", 0);
+  if (!ledCount || ledCount === oldCells) {
+    ledCount = rows * cols;
+    if (g("ledCount")) g("ledCount").value = String(ledCount);
   }
   const payload = {
-    rackName: g("rackName").value,
-    rows: num("rows"),
-    cols: num("cols"),
+    rackName: g("rackName")?.value || state.config?.rackName || "Bench Rack",
+    rows,
+    cols,
     leds: {
-      pin: num("pin"),
-      count: num("ledCount"),
+      pin: num("pin", state.config?.leds?.pin || 13),
+      count: ledCount,
       order: g("order").value,
       brightness: num("brightness"),
       idleBrightness: num("idleBrightness"),
@@ -762,7 +809,7 @@ async function patchFromSettings() {
       lowStockQty: num("lowStockQty"),
     },
   };
-  state.config = await api.send("/api/config", "PUT", payload);
+  state.config = normalizeConfig(await api.send("/api/config", "PUT", payload));
   $("#rackName").textContent = state.config.rackName;
   api.send("/api/leds", "POST", { mode: "corners" }).catch(() => {});
 }
@@ -980,19 +1027,25 @@ function bind() {
 async function boot() {
   bind();
   renderChips();
-  try {
-    state.named = await loadNamedParts();
-  } catch { state.named = []; }
+  const namedP = loadNamedParts()
+    .then((n) => { state.named = n; })
+    .catch(() => { state.named = []; });
   try {
     await refreshAll();
   } catch (e) {
+    state.config = normalizeConfig(null);
     $("#sysText").textContent = "API offline";
     toast("Can't reach the rack. Open this page from the ESP32, not a local file.");
+    renderSettings();
+    renderGrid();
   }
   renderChips();
   renderResults();
   connectWs();
   $("#q").focus();
+  await namedP;
+  renderChips();
+  if (state.view === "find") renderResults();
 }
 
 boot();

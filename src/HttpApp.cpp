@@ -320,7 +320,8 @@ void HttpApp::notifyWalk(uint8_t row, uint8_t col, int led) {
 }
 
 void HttpApp::registerRoutes() {
-  server.on("/api", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  // ESPAsyncWebServer's default matcher treats "/api" as "/api" plus "/api/*".
+  server.on(AsyncURIMatcher::exact("/api"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     JsonDocument doc;
     doc["name"] = FW_NAME;
     doc["fw"] = FW_VERSION;
@@ -360,7 +361,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 200, doc);
   });
 
-  server.on("/api/bootstrap", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/bootstrap"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     JsonDocument doc;
     app_->lock();
     fillStatus(app_, doc);
@@ -374,7 +375,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 200, doc);
   });
 
-  server.on("/api/find", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/find"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     const String q = req->hasParam("q") ? req->getParam("q")->value() : "";
     JsonDocument doc;
     doc["q"] = q;
@@ -388,7 +389,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 200, doc);
   });
 
-  server.on("/api/bin", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/bin"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     uint8_t row = 0, col = 0;
     if (!cellFromReq(app_, req, row, col)) {
       sendErr(req, 400, "cell required");
@@ -401,7 +402,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 200, doc);
   });
 
-  server.on("/api/locate", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/locate"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     uint8_t row = 0, col = 0;
     if (!cellFromReq(app_, req, row, col)) {
       sendErr(req, 400, "cell required");
@@ -415,7 +416,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 200, out);
   });
 
-  server.on("/api/add", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/add"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     uint8_t row = 0, col = 0;
     if (!cellFromReq(app_, req, row, col)) {
       sendErr(req, 400, "cell required");
@@ -442,7 +443,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 200, out);
   });
 
-  server.on("/api/take", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/take"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     uint8_t row = 0, col = 0;
     if (!cellFromReq(app_, req, row, col)) {
       sendErr(req, 400, "cell required");
@@ -469,7 +470,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 200, out);
   });
 
-  server.on("/api.md", HTTP_GET, [](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api.md"), HTTP_GET, [](AsyncWebServerRequest* req) {
     if (LittleFS.exists("/api.md")) {
       req->send(LittleFS, "/api.md", "text/markdown; charset=utf-8");
       return;
@@ -477,13 +478,13 @@ void HttpApp::registerRoutes() {
     req->send(404, "text/plain", "docs missing");
   });
 
-  server.on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/status"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     JsonDocument doc;
     fillStatus(app_, doc);
     sendJson(req, 200, doc);
   });
 
-  server.on("/api/config", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/config"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     JsonDocument doc;
     app_->lock();
     fillConfig(app_, doc);
@@ -491,8 +492,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 200, doc);
   });
 
-  server.on(
-      "/api/config", HTTP_PUT,
+  server.on(AsyncURIMatcher::exact("/api/config"), HTTP_PUT,
       [this](AsyncWebServerRequest* req) {
         JsonDocument doc;
         if (deserializeJson(doc, takeBody(req))) {
@@ -515,7 +515,7 @@ void HttpApp::registerRoutes() {
       },
       nullptr, onBody);
 
-  server.on("/api/inventory", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/inventory"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     JsonDocument doc;
     app_->lock();
     app_->inventory.toJson(doc);
@@ -523,8 +523,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 200, doc);
   });
 
-  server.on(
-      "/api/inventory", HTTP_PUT,
+  server.on(AsyncURIMatcher::exact("/api/inventory"), HTTP_PUT,
       [this](AsyncWebServerRequest* req) {
         JsonDocument doc;
         if (deserializeJson(doc, takeBody(req))) {
@@ -546,8 +545,7 @@ void HttpApp::registerRoutes() {
       },
       nullptr, onBody);
 
-  server.on(
-      "/api/stock/place", HTTP_POST,
+  server.on(AsyncURIMatcher::exact("/api/stock/place"), HTTP_POST,
       [this](AsyncWebServerRequest* req) {
         JsonDocument doc;
         if (deserializeJson(doc, takeBody(req))) {
@@ -588,8 +586,7 @@ void HttpApp::registerRoutes() {
       },
       nullptr, onBody);
 
-  server.on(
-      "/api/stock/adjust", HTTP_POST,
+  server.on(AsyncURIMatcher::exact("/api/stock/adjust"), HTTP_POST,
       [this](AsyncWebServerRequest* req) {
         JsonDocument doc;
         if (deserializeJson(doc, takeBody(req))) {
@@ -624,8 +621,7 @@ void HttpApp::registerRoutes() {
       },
       nullptr, onBody);
 
-  server.on(
-      "/api/stock/set", HTTP_POST,
+  server.on(AsyncURIMatcher::exact("/api/stock/set"), HTTP_POST,
       [this](AsyncWebServerRequest* req) {
         JsonDocument doc;
         if (deserializeJson(doc, takeBody(req))) {
@@ -657,8 +653,7 @@ void HttpApp::registerRoutes() {
       },
       nullptr, onBody);
 
-  server.on(
-      "/api/stock/clear", HTTP_POST,
+  server.on(AsyncURIMatcher::exact("/api/stock/clear"), HTTP_POST,
       [this](AsyncWebServerRequest* req) {
         JsonDocument doc;
         if (deserializeJson(doc, takeBody(req))) {
@@ -686,8 +681,7 @@ void HttpApp::registerRoutes() {
       },
       nullptr, onBody);
 
-  server.on(
-      "/api/stock/move", HTTP_POST,
+  server.on(AsyncURIMatcher::exact("/api/stock/move"), HTTP_POST,
       [this](AsyncWebServerRequest* req) {
         JsonDocument doc;
         if (deserializeJson(doc, takeBody(req))) {
@@ -722,8 +716,7 @@ void HttpApp::registerRoutes() {
       },
       nullptr, onBody);
 
-  server.on(
-      "/api/locate", HTTP_POST,
+  server.on(AsyncURIMatcher::exact("/api/locate"), HTTP_POST,
       [this](AsyncWebServerRequest* req) {
         JsonDocument doc;
         if (deserializeJson(doc, takeBody(req))) {
@@ -744,8 +737,7 @@ void HttpApp::registerRoutes() {
       },
       nullptr, onBody);
 
-  server.on(
-      "/api/leds", HTTP_POST,
+  server.on(AsyncURIMatcher::exact("/api/leds"), HTTP_POST,
       [this](AsyncWebServerRequest* req) {
         JsonDocument doc;
         if (deserializeJson(doc, takeBody(req))) {
@@ -772,7 +764,7 @@ void HttpApp::registerRoutes() {
       },
       nullptr, onBody);
 
-  server.on("/api/calibrate/walk-step", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/calibrate/walk-step"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     uint8_t r = 0, c = 0;
     int led = -1;
     JsonDocument doc;
@@ -788,7 +780,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 200, doc);
   });
 
-  server.on("/api/catalog/remote", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/catalog/remote"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     if (!req->hasParam("q")) {
       sendErr(req, 400, "q required");
       return;
@@ -809,7 +801,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 200, doc);
   });
 
-  server.on("/api/backup", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/backup"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     JsonDocument doc;
     app_->lock();
     JsonDocument cfg;
@@ -826,8 +818,7 @@ void HttpApp::registerRoutes() {
     req->send(res);
   });
 
-  server.on(
-      "/api/restore", HTTP_POST,
+  server.on(AsyncURIMatcher::exact("/api/restore"), HTTP_POST,
       [this](AsyncWebServerRequest* req) {
         JsonDocument doc;
         if (deserializeJson(doc, takeBody(req))) {
@@ -848,13 +839,13 @@ void HttpApp::registerRoutes() {
       },
       nullptr, onBody);
 
-  server.on("/api/update", HTTP_GET, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/update"), HTTP_GET, [this](AsyncWebServerRequest* req) {
     JsonDocument doc;
     app_->ota.toJson(doc);
     sendJson(req, 200, doc);
   });
 
-  server.on("/api/update/check", HTTP_POST, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/update/check"), HTTP_POST, [this](AsyncWebServerRequest* req) {
     if (app_->ota.busy()) {
       sendErr(req, 409, "update busy");
       return;
@@ -865,7 +856,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 202, doc);
   });
 
-  server.on("/api/update/install", HTTP_POST, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/update/install"), HTTP_POST, [this](AsyncWebServerRequest* req) {
     if (app_->wifi.apMode() || !app_->wifi.connected()) {
       sendErr(req, 409, "need station wifi");
       return;
@@ -880,7 +871,7 @@ void HttpApp::registerRoutes() {
     sendJson(req, 202, doc);
   });
 
-  server.on("/api/factory-reset", HTTP_POST, [this](AsyncWebServerRequest* req) {
+  server.on(AsyncURIMatcher::exact("/api/factory-reset"), HTTP_POST, [this](AsyncWebServerRequest* req) {
     app_->lock();
     app_->store.remove("/config.json");
     app_->store.remove("/inventory.json");

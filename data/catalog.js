@@ -45,8 +45,16 @@ let namedCache = null;
 
 export async function loadNamedParts() {
   if (namedCache) return namedCache;
-  const res = await fetch("/named-parts.json", { cache: "force-cache" });
-  namedCache = res.ok ? await res.json() : [];
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const res = await fetch("/named-parts.json", { cache: "force-cache", signal: ctrl.signal });
+    namedCache = res.ok ? await res.json() : [];
+  } catch {
+    namedCache = [];
+  } finally {
+    clearTimeout(timer);
+  }
   return namedCache;
 }
 
