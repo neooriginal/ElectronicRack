@@ -28,14 +28,9 @@ const char* stateName(OtaUpdate::State s) {
 void OtaUpdate::begin(Emit emit) {
   emit_ = std::move(emit);
   gOta = this;
-  bootMs_ = millis();
 }
 
 void OtaUpdate::loop() {
-  if (!autoChecked_ && millis() - bootMs_ > 4000) {
-    autoChecked_ = true;
-    wantCheck_ = true;
-  }
   if (wantCheck_ && !busy()) {
     wantCheck_ = false;
     doCheck();

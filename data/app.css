@@ -160,7 +160,7 @@ button:disabled { opacity: 0.4; cursor: default; }
   letter-spacing: -0.02em;
 }
 .search input::placeholder { color: var(--faint); }
-.clear-q {
+.clear-q, .add-q {
   border: 0;
   background: var(--bg-3);
   color: var(--muted);
@@ -168,6 +168,12 @@ button:disabled { opacity: 0.4; cursor: default; }
   height: 28px;
   border-radius: 8px;
   flex: 0 0 auto;
+}
+.add-q {
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text);
+  background: var(--accent-dim);
 }
 .hint {
   font-family: var(--mono);
@@ -264,6 +270,39 @@ button:disabled { opacity: 0.4; cursor: default; }
   line-height: 1.5;
 }
 .empty strong { display: block; color: var(--text); font-size: 16px; margin-bottom: 8px; }
+.empty .solid { margin-top: 16px; }
+.create-cta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+}
+.create-cta .name { font-size: 14px; font-weight: 560; }
+.create-cta .meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.sheet-fields {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0 4px;
+}
+.sheet-fields label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.sheet-fields input, .sheet-fields select {
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 8px 10px;
+  width: 100%;
+}
 .nudge-row { display: flex; gap: 8px; margin: 0 0 8px; }
 .nudge-row button {
   flex: 1;

@@ -373,11 +373,9 @@ export function searchLocal(query, namedParts) {
 }
 
 export function makeCustom(query) {
-  const parsed = parseQuery(query);
-  const name = query.trim();
-  if (!name) return null;
+  const parsed = parseQuery(query || "");
   return part({
-    name,
+    name: String(query || "").trim(),
     category: parsed.category || "other",
     package: parsed.pkg || "",
     source: "custom",

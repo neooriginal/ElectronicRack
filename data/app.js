@@ -1,4 +1,5 @@
 import {
+  CATEGORIES,
   COMMON_STARTERS,
   colorFor,
   loadNamedParts,
@@ -14,6 +15,8 @@ const state = {
   view: "find",
   q: "",
   named: [],
+  namedReady: false,
+  namedLoading: false,
   inventory: [],
   config: null,
   status: {},
@@ -249,16 +252,12 @@ function collectResults() {
 function renderResults() {
   const root = $("#results");
   const q = state.q.trim();
-  const { stock, local, remote, custom } = collectResults();
-  const blocks = [];
-
-  const addGroup = (title, items, extra = "") => {
-    if (!items.length) return;
-    blocks.push(`<div><div class="group-h"><span>${title}</span><span>${extra}</span></div><div class="list"></div></div>`);
-  };
+  const { stock, local, remote } = collectResults();
 
   if (!q && !stock.length) {
-    root.innerHTML = `<div class="empty"><strong>Rack is empty.</strong>Search a value or name, tap it, then + to drop it in the first empty bin. Stocked parts always rise to the top.</div>`;
+    root.innerHTML = `<div class="empty"><strong>Rack is empty.</strong>Search a value or name, or add your own part and drop it in a bin.</div>`;
+    root.appendChild(customCta("Add custom part"));
+    state._flat = [];
     return;
   }
 
@@ -267,12 +266,6 @@ function renderResults() {
   if (stock.length) groups.push(["In the rack", stock, `${stock.length}`]);
   if (local.length) groups.push(["Catalog", local, "generated + named"]);
   if (remote.length) groups.push(["JLCPCB / LCSC", remote, state.remoteBusy ? "updating…" : "live"]);
-  if (q && custom) groups.push(["Create", [custom], "custom"]);
-
-  if (!groups.length) {
-    root.innerHTML = `<div class="empty">Nothing matched. Press Enter to create “${q}”.</div>`;
-    return;
-  }
 
   const flat = [];
   for (const [title, items, extra] of groups) {
@@ -288,8 +281,32 @@ function renderResults() {
     wrap.appendChild(list);
     root.appendChild(wrap);
   }
+
+  if (!groups.length && q) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.innerHTML = `<strong>Nothing matched “${esc(q)}”.</strong>Add it as a custom part.`;
+    root.appendChild(empty);
+  }
+  root.appendChild(customCta(q ? `Add “${q}” as custom` : "Add custom part"));
+
   state._flat = flat;
   if (state.cursor >= flat.length) state.cursor = 0;
+}
+
+function customCta(label) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "create-cta";
+  b.innerHTML = `<div><div class="name">${esc(label)}</div><div class="meta">Name, category, package — then pick a bin</div></div>`;
+  b.addEventListener("click", () => openCustom(state.q.trim()));
+  return b;
+}
+
+function openCustom(name, cell) {
+  if (cell) state.placeCell = cell;
+  else if (!state.placeCell) state.placeCell = firstEmpty();
+  selectPart(makeCustom(name || ""));
 }
 
 function resultRow(item, active) {
@@ -367,19 +384,30 @@ function openSheet() {
   const card = $("#sheetCard");
   const stock = item.stock;
   const loc = stock ? primaryLoc(stock) : null;
-  const qty = loc ? loc.qty : 0;
+  const isNew = !stock;
+  const qty = loc ? loc.qty : (isNew ? 1 : 0);
   const cell = state.placeCell;
+  const catOpts = CATEGORIES.map((c) =>
+    `<option value="${esc(c)}" ${c === (item.category || "other") ? "selected" : ""}>${esc(c)}</option>`
+  ).join("");
   card.innerHTML = `
     <div class="sheet-top">
       <div>
-        <div class="cat">${esc(item.category || "part")}</div>
-        <h2>${esc(item.name)}</h2>
-        <div class="meta" style="color:var(--muted);margin-top:4px;font-size:13px">
+        <div class="cat">${isNew ? "new part" : esc(item.category || "part")}</div>
+        <h2>${isNew ? "Add to rack" : esc(item.name)}</h2>
+        ${isNew ? "" : `<div class="meta" style="color:var(--muted);margin-top:4px;font-size:13px">
           ${esc([item.mpn, item.package, item.brand, item.sku].filter(Boolean).join(" · "))}
-        </div>
+        </div>`}
       </div>
       <button class="close" id="sheetClose" aria-label="Close">✕</button>
     </div>
+    ${isNew ? `<div class="sheet-fields">
+      <label>Name<input id="cName" type="text" autocomplete="off" spellcheck="false" value="${esc(item.name)}" placeholder="e.g. flux, SN74HC595, leftover screws" /></label>
+      <label>Category<select id="cCat">${catOpts}</select></label>
+      <label>Package<input id="cPkg" type="text" autocomplete="off" value="${esc(item.package)}" placeholder="0805, DIP-8, bag…" /></label>
+      <label>MPN<input id="cMpn" type="text" autocomplete="off" value="${esc(item.mpn)}" /></label>
+      <label>Brand<input id="cBrand" type="text" autocomplete="off" value="${esc(item.brand)}" /></label>
+    </div>` : ""}
     <div class="stepper">
       <button id="dec">−</button>
       <div class="num"><input id="qty" type="number" min="0" inputmode="numeric" value="${qty}" /></div>
@@ -424,7 +452,30 @@ function openSheet() {
   if (empty) empty.onclick = () => clearCell();
   $("#qty").addEventListener("change", () => commitQty(true));
   paintMini();
+  if (isNew) {
+    const nameIn = $("#cName");
+    if (nameIn && !nameIn.value) nameIn.focus();
+    $("#cCat")?.addEventListener("change", () => {
+      if (state.selected) {
+        state.selected.category = $("#cCat").value;
+        state.selected.color = colorFor(state.selected.category);
+      }
+    });
+  }
   try { navigator.vibrate?.(8); } catch {}
+}
+
+function applySheetFields() {
+  const item = state.selected;
+  if (!item || item.stock) return;
+  const name = $("#cName")?.value.trim();
+  if (name != null && $("#cName")) item.name = name;
+  if ($("#cCat")) item.category = $("#cCat").value;
+  if ($("#cPkg")) item.package = $("#cPkg").value.trim();
+  if ($("#cMpn")) item.mpn = $("#cMpn").value.trim();
+  if ($("#cBrand")) item.brand = $("#cBrand").value.trim();
+  item.color = colorFor(item.category);
+  item.source = item.source || "custom";
 }
 
 function paintMini() {
@@ -527,10 +578,16 @@ async function nudge(delta) {
 }
 
 async function commitQty(fromInput) {
+  applySheetFields();
   const cell = state.placeCell;
   if (!cell) { toast("No empty bin — open Grid and tap one, or raise rows/columns in Setup"); return; }
   const qty = Math.max(0, parseInt($("#qty").value, 10) || 0);
   const item = state.selected;
+  if (!item.stock && !item.name) {
+    toast("Name the part first");
+    $("#cName")?.focus();
+    return;
+  }
   try {
     if (item.stock && findStockMatch(item)) {
       await api.send("/api/stock/set", "POST", { cell: cell.cell, qty });
@@ -613,11 +670,8 @@ function renderGrid(lit) {
       b.onclick = () => {
         if (hit) selectPart({ ...hit.item, stock: hit.item, color: hit.item.color });
         else {
-          state.placeCell = { row: r, col: c, cell: lab };
           locate(r, c);
-          setView("find");
-          $("#q").focus();
-          toast("Assign a part to " + lab);
+          openCustom(state.q.trim(), { row: r, col: c, cell: lab });
         }
       };
       g.appendChild(b);
@@ -809,9 +863,20 @@ async function patchFromSettings() {
       lowStockQty: num("lowStockQty"),
     },
   };
+  const prev = state.config || {};
+  const layoutChanged =
+    rows !== (prev.rows || 0) ||
+    cols !== (prev.cols || 0) ||
+    ledCount !== (prev.leds?.count || 0) ||
+    num("pin", prev.leds?.pin || 13) !== (prev.leds?.pin || 13) ||
+    g("order")?.value !== (prev.leds?.order || "GRB") ||
+    g("origin")?.value !== (prev.wiring?.origin || "top-left") ||
+    (g("axis")?.value === "row") !== (prev.wiring?.rowFirst !== false) ||
+    !!g("serpentine")?.checked !== !!prev.wiring?.serpentine ||
+    num("offset", prev.wiring?.offset || 0) !== (prev.wiring?.offset || 0);
   state.config = normalizeConfig(await api.send("/api/config", "PUT", payload));
   $("#rackName").textContent = state.config.rackName;
-  api.send("/api/leds", "POST", { mode: "corners" }).catch(() => {});
+  api.send("/api/leds", "POST", { mode: layoutChanged ? "corners" : "idle" }).catch(() => {});
 }
 
 async function startMap() {
@@ -859,10 +924,24 @@ function onQuery() {
   const clear = $("#clearQ");
   if (clear) clear.hidden = !state.q;
   renderResults();
-  clearTimeout(remoteTimer);
   const q = state.q.trim();
+  if (q) ensureNamedParts();
+  clearTimeout(remoteTimer);
   if (q.length < 2 || state.config?.ui?.remoteSearch === false) return;
   remoteTimer = setTimeout(() => fetchRemote(q), 220);
+}
+
+function ensureNamedParts() {
+  if (state.namedReady || state.namedLoading) return;
+  state.namedLoading = true;
+  loadNamedParts()
+    .then((n) => { state.named = n || []; })
+    .catch(() => { state.named = []; })
+    .finally(() => {
+      state.namedReady = true;
+      state.namedLoading = false;
+      if (state.view === "find" && state.q.trim()) renderResults();
+    });
 }
 
 async function fetchRemote(q) {
@@ -1001,8 +1080,9 @@ function bind() {
     if (e.key === "ArrowUp") { e.preventDefault(); state.cursor = Math.max(0, state.cursor - 1); renderResults(); }
     if (e.key === "Enter") {
       e.preventDefault();
-      const item = (state._flat || [])[state.cursor] || makeCustom(state.q);
+      const item = (state._flat || [])[state.cursor];
       if (item) selectPart(item);
+      else openCustom(state.q.trim());
     }
   });
   $("#clearQ")?.addEventListener("click", () => {
@@ -1010,6 +1090,7 @@ function bind() {
     onQuery();
     $("#q").focus();
   });
+  $("#btnAddCustom")?.addEventListener("click", () => openCustom(state.q.trim()));
   $("#btnIdle")?.addEventListener("click", () => api.send("/api/leds", "POST", { mode: "idle" }));
   document.addEventListener("keydown", (e) => {
     const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
@@ -1027,9 +1108,6 @@ function bind() {
 async function boot() {
   bind();
   renderChips();
-  const namedP = loadNamedParts()
-    .then((n) => { state.named = n; })
-    .catch(() => { state.named = []; });
   try {
     await refreshAll();
   } catch (e) {
@@ -1043,9 +1121,6 @@ async function boot() {
   renderResults();
   connectWs();
   $("#q").focus();
-  await namedP;
-  renderChips();
-  if (state.view === "find") renderResults();
 }
 
 boot();

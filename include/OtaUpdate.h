@@ -31,8 +31,6 @@ private:
   State state_ = State::Idle;
   bool wantCheck_ = false;
   bool wantInstall_ = false;
-  bool autoChecked_ = false;
-  uint32_t bootMs_ = 0;
   String message_ = "idle";
   String latestVersion_;
   String latestGit_;

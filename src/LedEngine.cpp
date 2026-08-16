@@ -353,29 +353,47 @@ void LedEngine::render() {
     return;
   }
 
+  const uint8_t span = hi > lo ? static_cast<uint8_t>(hi - lo) : 1;
+
   for (int r = 0; r < rows; r++) {
     for (int c = 0; c < cols; c++) {
       const CellLight* s = stockAt(r, c);
+      const bool filled = s && s->occupied;
       uint8_t cr, cg, cb;
       cellColor(r, c, cr, cg, cb);
-      uint8_t scale = s && s->occupied ? lo : 0;
+      uint8_t scale = filled ? lo : 0;
 
-      if (cfg_.idleAnim == IdleAnim::Breathe && s && s->occupied) {
-        const float phase = t * 1.6f + (r * cols + c) * 0.37f;
-        const float b = 0.55f + 0.45f * (0.5f + 0.5f * sinf(phase));
-        scale = static_cast<uint8_t>(lo * b);
+      if (cfg_.idleAnim == IdleAnim::Breathe) {
+        const float phase = t * 1.8f + (r * cols + c) * 0.37f;
+        const float wave = 0.5f + 0.5f * sinf(phase);
+        if (filled) {
+          scale = static_cast<uint8_t>(lo + span * wave);
+        } else {
+          cr = 36;
+          cg = 32;
+          cb = 28;
+          scale = static_cast<uint8_t>(max(8, lo / 2) * (0.35f + 0.65f * wave));
+        }
       } else if (cfg_.idleAnim == IdleAnim::Sparkle) {
-        if (s && s->occupied) {
-          const uint32_t seed = (now / 80) * 1103515245u + (r * 31 + c) * 12345u;
-          const bool twinkle = ((seed >> 16) & 0xFF) < 14;
+        const uint32_t seed = (now / 70) * 1664525u + static_cast<uint32_t>(r * 97 + c * 13 + 1) * 1013904223u;
+        const uint8_t rnd = (seed >> 16) & 0xFF;
+        const bool twinkle = rnd < (filled ? 28 : 18);
+        if (filled) {
           scale = twinkle ? hi : lo;
+        } else if (twinkle) {
+          cr = 220;
+          cg = 210;
+          cb = 190;
+          scale = static_cast<uint8_t>(lo + span / 2);
+        } else {
+          scale = 0;
         }
       } else if (cfg_.idleAnim == IdleAnim::Rainbow) {
         const uint16_t hue = static_cast<uint16_t>(now * 12 + (r * cols + c) * 1800);
         const uint32_t col = Adafruit_NeoPixel::gamma32(Adafruit_NeoPixel::ColorHSV(hue, 200, 255));
         unpack(col, cr, cg, cb);
-        scale = s && s->occupied ? lo + 20 : lo / 3;
-      } else if (cfg_.idleAnim == IdleAnim::Heatmap && s && s->occupied) {
+        scale = filled ? lo + 20 : lo / 3;
+      } else if (cfg_.idleAnim == IdleAnim::Heatmap && filled) {
         const float q = min(1.0f, s->qty / 50.0f);
         cr = lerp8(40, 255, q);
         cg = lerp8(90, 90, q);
