@@ -1,110 +1,29 @@
 #include "App.h"
 
 #include <ArduinoJson.h>
-
-namespace {
-
-void configToJson(const AppConfig& c, JsonDocument& doc) {
-  doc.clear();
-  doc["version"] = 1;
-  doc["rackName"] = c.rackName;
-  doc["rows"] = c.rows;
-  doc["cols"] = c.cols;
-
-  JsonObject leds = doc["leds"].to<JsonObject>();
-  leds["pin"] = c.ledPin;
-  leds["count"] = c.ledCount;
-  leds["order"] = colorOrderName(c.order);
-  leds["brightness"] = c.brightness;
-  leds["idleBrightness"] = c.idleBrightness;
-  leds["locateColor"] = hexColor(c.locateColor);
-  leds["idleAnim"] = idleAnimName(c.idleAnim);
-  leds["startupAnim"] = startupAnimName(c.startupAnim);
-
-  JsonObject wiring = doc["wiring"].to<JsonObject>();
-  wiring["origin"] = originName(c.origin);
-  wiring["rowFirst"] = c.rowFirst;
-  wiring["serpentine"] = c.serpentine;
-  wiring["offset"] = c.ledOffset;
-
-  JsonObject ov = doc["overrides"].to<JsonObject>();
-  for (const auto& kv : c.overrides) {
-    ov[String(kv.first)] = kv.second;
-  }
-
-  JsonObject ui = doc["ui"].to<JsonObject>();
-  ui["locateOnSelect"] = c.locateOnSelect;
-  ui["locateHoldMs"] = c.locateHoldMs;
-  ui["lowStockQty"] = c.lowStockQty;
-  ui["remoteSearch"] = c.remoteSearch;
-}
-
-}  // namespace
+#include <Preferences.h>
 
 App app;
 
 void App::begin() {
-  mux_ = xSemaphoreCreateMutex();
   Serial.begin(115200);
   delay(200);
   Serial.printf("\n" FW_NAME " " FW_VERSION " (%s)\n", FW_GIT);
 
-  if (!store.begin()) {
-    Serial.println("[app] filesystem unavailable — running with defaults");
-  }
-
-  JsonDocument cfgDoc;
-  if (store.readJson("/config.json", cfgDoc)) {
-    bool rebuild = false;
-    mergeConfig(cfgDoc, rebuild);
-  }
+  identity.begin();
+  loadLedConfig();
   config.clamp();
   rack.bind(&config);
 
-  inventory.load(store);
   leds.begin(config, &rack);
-  refreshStockLights();
-
-  wifi.begin([this]() { leds.loop(); });
-  http.begin(this);
-  ota.begin([this](const char* json) { http.broadcast(json); });
+  ble.begin(this);
 }
 
 void App::loop() {
-  wifi.loop();
   leds.loop();
-  http.loop();
-  ota.loop();
-  if (inventoryDirty_ && millis() - inventoryDirtyAt_ >= 450) flushInventory();
-}
-
-void App::lock() {
-  if (mux_) xSemaphoreTake(mux_, portMAX_DELAY);
-}
-
-void App::unlock() {
-  if (mux_) xSemaphoreGive(mux_);
-}
-
-bool App::saveConfig() {
-  JsonDocument doc;
-  configToJson(config, doc);
-  return store.writeJson("/config.json", doc);
-}
-
-bool App::saveInventory() {
-  inventoryDirty_ = false;
-  return inventory.save(store);
-}
-
-void App::markInventoryDirty() {
-  inventoryDirty_ = true;
-  inventoryDirtyAt_ = millis();
-}
-
-void App::flushInventory() {
-  if (!inventoryDirty_) return;
-  saveInventory();
+  ble.loop();
+  // Yield a tick so the idle task can run and the BLE host keeps its timing.
+  delay(1);
 }
 
 void App::applyConfig(bool rebuildLeds) {
@@ -112,86 +31,87 @@ void App::applyConfig(bool rebuildLeds) {
   rack.bind(&config);
   if (rebuildLeds) leds.applyHardware(config);
   else leds.setConfig(config);
-  refreshStockLights();
 }
 
-void App::refreshStockLights() {
-  std::vector<CellLight> snap;
-  inventory.snapshot(snap);
-  leds.setStock(snap);
-}
-
-bool App::mergeConfig(JsonVariantConst src, bool& rebuildLeds) {
-  rebuildLeds = false;
-  if (src["rackName"].is<const char*>()) config.rackName = src["rackName"].as<const char*>();
-  if (src["rows"].is<int>()) config.rows = static_cast<uint8_t>(src["rows"].as<int>());
-  if (src["cols"].is<int>()) config.cols = static_cast<uint8_t>(src["cols"].as<int>());
-
-  JsonVariantConst leds = src["leds"];
-  if (!leds.isNull()) {
-    if (leds["pin"].is<int>()) {
-      config.ledPin = static_cast<uint8_t>(leds["pin"].as<int>());
-      rebuildLeds = true;
-    }
-    if (leds["count"].is<int>()) {
-      config.ledCount = static_cast<uint16_t>(leds["count"].as<int>());
-      rebuildLeds = true;
-    }
-    if (leds["order"].is<const char*>()) {
-      ColorOrder o;
-      if (colorOrderFromName(leds["order"].as<const char*>(), o)) {
-        config.order = o;
-        rebuildLeds = true;
-      }
-    }
-    if (leds["brightness"].is<int>()) config.brightness = static_cast<uint8_t>(leds["brightness"].as<int>());
-    if (leds["idleBrightness"].is<int>())
-      config.idleBrightness = static_cast<uint8_t>(leds["idleBrightness"].as<int>());
-    if (leds["locateColor"].is<const char*>())
-      config.locateColor = parseHexColor(leds["locateColor"].as<const char*>(), config.locateColor);
-    if (leds["idleAnim"].is<const char*>()) {
-      IdleAnim a;
-      if (idleAnimFromName(leds["idleAnim"].as<const char*>(), a)) config.idleAnim = a;
-    }
-    if (leds["startupAnim"].is<const char*>()) {
-      StartupAnim a;
-      if (startupAnimFromName(leds["startupAnim"].as<const char*>(), a)) config.startupAnim = a;
-    }
+void App::applyWiring(JsonVariantConst src) {
+  if (src["origin"].is<const char*>()) {
+    WiringOrigin o;
+    if (originFromName(src["origin"].as<const char*>(), o)) config.origin = o;
   }
-
-  JsonVariantConst wiring = src["wiring"];
-  if (!wiring.isNull()) {
-    if (wiring["origin"].is<const char*>()) {
-      WiringOrigin o;
-      if (originFromName(wiring["origin"].as<const char*>(), o)) config.origin = o;
-    }
-    if (wiring["rowFirst"].is<bool>()) config.rowFirst = wiring["rowFirst"].as<bool>();
-    if (wiring["serpentine"].is<bool>()) config.serpentine = wiring["serpentine"].as<bool>();
-    if (wiring["offset"].is<int>()) config.ledOffset = static_cast<int16_t>(wiring["offset"].as<int>());
-  }
+  if (src["rowFirst"].is<bool>()) config.rowFirst = src["rowFirst"].as<bool>();
+  if (src["serpentine"].is<bool>()) config.serpentine = src["serpentine"].as<bool>();
+  if (src["offset"].is<int>()) config.ledOffset = static_cast<int16_t>(src["offset"].as<int>());
 
   JsonVariantConst ov = src["overrides"];
   if (ov.is<JsonObjectConst>()) {
     config.overrides.clear();
-    JsonObjectConst obj = ov.as<JsonObjectConst>();
-    for (JsonPairConst kv : obj) {
+    for (JsonPairConst kv : ov.as<JsonObjectConst>()) {
       config.overrides[atoi(kv.key().c_str())] = kv.value().as<int>();
     }
   }
+  applyConfig(false);
+}
 
-  JsonVariantConst ui = src["ui"];
-  if (!ui.isNull()) {
-    if (ui["locateOnSelect"].is<bool>()) config.locateOnSelect = ui["locateOnSelect"].as<bool>();
-    if (ui["locateHoldMs"].is<int>()) config.locateHoldMs = static_cast<uint16_t>(ui["locateHoldMs"].as<int>());
-    if (ui["lowStockQty"].is<int>()) config.lowStockQty = ui["lowStockQty"].as<int>();
-    if (ui["remoteSearch"].is<bool>()) config.remoteSearch = ui["remoteSearch"].as<bool>();
-  }
-
-  // Flat keys from partial UI patches
+void App::applyLedConfig(JsonVariantConst src) {
+  bool rebuild = false;
   if (src["pin"].is<int>()) {
     config.ledPin = static_cast<uint8_t>(src["pin"].as<int>());
-    rebuildLeds = true;
+    rebuild = true;
   }
-  config.clamp();
-  return true;
+  if (src["count"].is<int>()) {
+    config.ledCount = static_cast<uint16_t>(src["count"].as<int>());
+    rebuild = true;
+  }
+  if (src["order"].is<const char*>()) {
+    ColorOrder o;
+    if (colorOrderFromName(src["order"].as<const char*>(), o)) {
+      config.order = o;
+      rebuild = true;
+    }
+  }
+  if (src["brightness"].is<int>())
+    config.brightness = static_cast<uint8_t>(src["brightness"].as<int>());
+  if (src["idleBrightness"].is<int>())
+    config.idleBrightness = static_cast<uint8_t>(src["idleBrightness"].as<int>());
+  if (src["locateColor"].is<const char*>())
+    config.locateColor = parseHexColor(src["locateColor"].as<const char*>(), config.locateColor);
+  if (src["locateHoldMs"].is<int>())
+    config.locateHoldMs = static_cast<uint16_t>(src["locateHoldMs"].as<int>());
+  if (src["idleAnim"].is<const char*>()) {
+    IdleAnim a;
+    if (idleAnimFromName(src["idleAnim"].as<const char*>(), a)) config.idleAnim = a;
+  }
+  if (src["startupAnim"].is<const char*>()) {
+    StartupAnim a;
+    if (startupAnimFromName(src["startupAnim"].as<const char*>(), a)) config.startupAnim = a;
+  }
+
+  applyConfig(rebuild);
+  saveLedConfig();
+}
+
+void App::loadLedConfig() {
+  Preferences prefs;
+  prefs.begin("rackled", true);
+  config.ledPin = prefs.getUChar("pin", config.ledPin);
+  config.ledCount = prefs.getUShort("count", config.ledCount);
+  config.order = static_cast<ColorOrder>(prefs.getUChar("order", static_cast<uint8_t>(config.order)));
+  config.brightness = prefs.getUChar("bri", config.brightness);
+  config.idleBrightness = prefs.getUChar("idlebri", config.idleBrightness);
+  config.rows = prefs.getUChar("rows", config.rows);
+  config.cols = prefs.getUChar("cols", config.cols);
+  prefs.end();
+}
+
+void App::saveLedConfig() {
+  Preferences prefs;
+  prefs.begin("rackled", false);
+  prefs.putUChar("pin", config.ledPin);
+  prefs.putUShort("count", config.ledCount);
+  prefs.putUChar("order", static_cast<uint8_t>(config.order));
+  prefs.putUChar("bri", config.brightness);
+  prefs.putUChar("idlebri", config.idleBrightness);
+  prefs.putUChar("rows", config.rows);
+  prefs.putUChar("cols", config.cols);
+  prefs.end();
 }

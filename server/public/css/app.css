@@ -698,3 +698,47 @@ h1 { margin: 4px 0 0; font-size: 28px; font-weight: 620; letter-spacing: -0.03em
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* Connect gate: shown until the browser pairs with the rack over Bluetooth. */
+.connect-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(1200px 500px at 10% -10%, rgba(230, 161, 92, 0.10), transparent 50%),
+    radial-gradient(900px 400px at 110% 0%, rgba(61, 214, 224, 0.08), transparent 45%),
+    var(--bg);
+}
+.connect-card {
+  width: min(420px, 100%);
+  text-align: center;
+  padding: 32px 28px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+}
+.connect-card .mark.big {
+  width: 56px; height: 56px; border-radius: 14px;
+  margin: 0 auto 18px;
+}
+.connect-card h1 { font-size: 22px; margin: 0 0 8px; }
+.connect-card p { color: var(--muted); font-size: 14px; margin: 0 0 18px; line-height: 1.5; }
+.connect-card p:last-child { margin-bottom: 0; margin-top: 18px; }
+.connect-card code {
+  font-family: var(--mono);
+  background: var(--bg-3);
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+.solid.big {
+  width: 100%;
+  padding: 14px 18px;
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: 12px;
+}

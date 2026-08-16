@@ -43,6 +43,16 @@ Then open **http://rack.local**. If the network isn’t there, the board raises 
 
 After this USB flash, new firmware comes from **Setup → Firmware**.
 
+Your stock survives a firmware or web-UI update: what sits in which bin is mirrored
+to a small `keep` flash partition that `uploadfs` and OTA never touch, and is
+restored on the next boot. Only bin assignments and counts are stored — catalog
+details (brand, distributor SKU, part blurbs) are fetched live when you search and
+are never written to the device.
+
+Upgrading a board flashed before the `keep` partition existed needs one more USB
+flash (`pio run -t upload`), because the partition table itself changes. Until
+then the firmware runs fine, it just cannot protect data across a filesystem write.
+
 ---
 
 ### First evening

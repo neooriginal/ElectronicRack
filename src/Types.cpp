@@ -96,30 +96,6 @@ bool startupAnimFromName(const char* s, StartupAnim& out) {
   return false;
 }
 
-uint32_t categoryColor(const String& category) {
-  String c = category;
-  c.toLowerCase();
-  if (c == "resistor") return 0xE6A15C;
-  if (c == "capacitor") return 0x5B9DFF;
-  if (c == "inductor") return 0x7C6BFF;
-  if (c == "diode") return 0xF0C14B;
-  if (c == "led") return 0xFF6B8A;
-  if (c == "transistor") return 0x4FD1A5;
-  if (c == "ic") return 0xC084FC;
-  if (c == "mcu") return 0xA78BFA;
-  if (c == "board") return 0x22D3EE;
-  if (c == "sensor") return 0x34D399;
-  if (c == "connector") return 0xFB7185;
-  if (c == "module") return 0x67E8F9;
-  if (c == "tool") return 0xF5D0A9;
-  if (c == "chemical") return 0xFDE68A;
-  if (c == "wire") return 0xFBBF24;
-  if (c == "display") return 0x93C5FD;
-  if (c == "power") return 0xF87171;
-  if (c == "mechanical") return 0xA8A29E;
-  return 0xE6A15C;
-}
-
 String cellLabel(uint8_t row, uint8_t col) {
   String colS;
   int c = static_cast<int>(col) + 1;
@@ -166,13 +142,6 @@ bool parseCellLabel(const String& raw, uint8_t rows, uint8_t cols, uint8_t& row,
   row = static_cast<uint8_t>(r);
   col = static_cast<uint8_t>(c);
   return true;
-}
-
-String newItemId() {
-  char buf[12];
-  uint32_t n = (esp_random() ^ millis()) & 0xFFFFFF;
-  snprintf(buf, sizeof(buf), "%06x", n);
-  return String(buf);
 }
 
 uint32_t parseHexColor(const char* s, uint32_t fallback) {

@@ -21,26 +21,6 @@ enum class LedMode : uint8_t {
   Off
 };
 
-struct StockLoc {
-  uint8_t row = 0;
-  uint8_t col = 0;
-  int32_t qty = 0;
-};
-
-struct Item {
-  String id;
-  String name;
-  String mpn;
-  String sku;
-  String category;
-  String pkg;
-  String brand;
-  String notes;
-  String source;
-  uint32_t color = 0xE6A15C;
-  std::vector<StockLoc> locs;
-};
-
 struct CellLight {
   uint8_t row = 0;
   uint8_t col = 0;
@@ -94,9 +74,7 @@ bool idleAnimFromName(const char* s, IdleAnim& out);
 const char* startupAnimName(StartupAnim a);
 bool startupAnimFromName(const char* s, StartupAnim& out);
 
-uint32_t categoryColor(const String& category);
 String cellLabel(uint8_t row, uint8_t col);
 bool parseCellLabel(const String& raw, uint8_t rows, uint8_t cols, uint8_t& row, uint8_t& col);
-String newItemId();
 uint32_t parseHexColor(const char* s, uint32_t fallback);
 String hexColor(uint32_t c);

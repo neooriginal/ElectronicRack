@@ -22,6 +22,8 @@ const state = {
   status: {},
   selected: null,
   placeCell: null,
+  pendingCell: null,
+  shareMode: false,
   cursor: 0,
   remote: [],
   remoteQ: "",
@@ -33,23 +35,93 @@ const state = {
   ignoreDirtyUntil: 0,
 };
 
-const api = {
-  async get(path) {
-    const r = await fetch(path, { cache: "no-store" });
-    if (!r.ok) throw new Error(await r.text());
-    return r.json();
-  },
-  async send(path, method, body) {
+const REQ_TIMEOUT_MS = 6000;
+
+// Requests the ESP32 has not acknowledged yet. The header shows a pip while any
+// are outstanding so a slow save never looks like a finished one.
+const inflight = { n: 0, listeners: new Set() };
+
+function inflightBegin() {
+  inflight.n++;
+  inflight.listeners.forEach((fn) => fn(inflight.n));
+}
+
+function inflightEnd() {
+  inflight.n = Math.max(0, inflight.n - 1);
+  inflight.listeners.forEach((fn) => fn(inflight.n));
+}
+
+async function once(path, { method = "GET", body, timeout = REQ_TIMEOUT_MS } = {}) {
+  // Without an explicit abort a dropped packet leaves the request hanging for the
+  // browser's own timeout, which is where "takes seconds, if at all" came from.
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), timeout);
+  try {
     const r = await fetch(path, {
       method,
-      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      signal: ctl.signal,
+      headers: body == null ? undefined : { "Content-Type": "application/json" },
       body: body == null ? undefined : JSON.stringify(body),
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || r.statusText);
+    if (!r.ok) {
+      const err = new Error(data.error || r.statusText || `HTTP ${r.status}`);
+      err.status = r.status;
+      err.data = data;
+      throw err;
+    }
     return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Retry only where a duplicate delivery is harmless: reads, and writes that carry
+// an absolute value. Never /api/stock/adjust — replaying a delta double-counts.
+async function withRetry(path, opts, attempts) {
+  let last;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await once(path, opts);
+    } catch (e) {
+      last = e;
+      // A refusal from the board is a real answer; only retry when it never replied.
+      if (e.status) throw e;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 250 * (i + 1)));
+    }
+  }
+  throw last;
+}
+
+const api = {
+  async get(path) {
+    inflightBegin();
+    try {
+      return await withRetry(path, {}, 3);
+    } finally {
+      inflightEnd();
+    }
+  },
+  async send(path, method, body, { retry = false } = {}) {
+    inflightBegin();
+    try {
+      return await withRetry(path, { method, body }, retry ? 3 : 1);
+    } finally {
+      inflightEnd();
+    }
   },
 };
+
+// Runs an action with the button showing a spinner until the board acknowledges.
+async function withPending(btn, fn) {
+  if (btn) btn.classList.add("pending");
+  try {
+    return await fn();
+  } finally {
+    if (btn) btn.classList.remove("pending");
+  }
+}
 
 function toast(msg) {
   const el = $("#toast");
@@ -129,12 +201,55 @@ function primaryLoc(item) {
   return (item.locs && item.locs[0]) || null;
 }
 
+// Every part stored in a compartment, with the amount held in that compartment.
+function cellItems(cell) {
+  if (!cell) return [];
+  const out = [];
+  for (const item of state.inventory) {
+    const loc = (item.locs || []).find((l) => locCell(l) === cell.cell);
+    if (loc) out.push({ item, qty: loc.qty || 0 });
+  }
+  return out;
+}
+
 function touchDirty() {
   state.ignoreDirtyUntil = Date.now() + 1000;
 }
 
 function locCell(loc) {
   return loc.cell || cellLabel(loc.row, loc.col);
+}
+
+// Reflect a confirmed placement without waiting for a full inventory re-fetch.
+function applyLocalPlace(item, cell, qty, id, share) {
+  const existing = state.inventory.find((it) => (id && it.id === id) || findStockMatch(item) === it);
+  const target = existing || {
+    id: id || "",
+    name: item.name,
+    mpn: item.mpn || "",
+    sku: item.sku || "",
+    category: item.category || "other",
+    package: item.package || "",
+    brand: item.brand || "",
+    notes: "",
+    source: item.source || "custom",
+    color: item.color || colorFor(item.category),
+    locs: [],
+  };
+  // A single-part bin holds one part, so anything else claiming it has been
+  // evicted. A shared compartment keeps its other occupants.
+  if (!share) {
+    for (const other of state.inventory) {
+      if (other === target) continue;
+      other.locs = (other.locs || []).filter((l) => locCell(l) !== cell.cell);
+      other.qty = (other.locs || []).reduce((a, l) => a + (l.qty || 0), 0);
+    }
+  }
+  target.locs = (target.locs || []).filter((l) => locCell(l) !== cell.cell);
+  if (qty > 0) target.locs.push({ row: cell.row, col: cell.col, cell: cell.cell, qty });
+  target.qty = target.locs.reduce((a, l) => a + (l.qty || 0), 0);
+  if (!existing && target.locs.length) state.inventory.push(target);
+  state.inventory = state.inventory.filter((i) => (i.locs || []).length);
 }
 
 function applyLocalQty(cell, qty) {
@@ -198,8 +313,15 @@ function paintSys() {
   const pip = $("#linkPip");
   const text = $("#sysText");
   const s = state.status || {};
-  pip.className = "pip " + (s.ip ? "ok" : "warn");
-  text.textContent = s.ip ? `${s.ip} · ${s.heap || 0}B` : "offline";
+  if (inflight.n > 0) {
+    pip.className = "pip busy";
+    text.textContent = "saving…";
+    return;
+  }
+  pip.className = "pip " + (s.ap ? "warn" : (s.ip ? "ok" : "warn"));
+  text.textContent = s.ap
+    ? `AP ${s.ssid || "RACK"} · ${s.ip || "192.168.4.1"}`
+    : (s.ip ? `${s.ip} · ${s.heap || 0}B` : "offline");
   const chip = $("#otaChip");
   if (chip) {
     chip.hidden = !(state.ota && state.ota.available);
@@ -304,8 +426,8 @@ function customCta(label) {
 }
 
 function openCustom(name, cell) {
-  if (cell) state.placeCell = cell;
-  else if (!state.placeCell) state.placeCell = firstEmpty();
+  // Only an explicit pick (tapping a bin in Grid) carries over into the sheet.
+  state.pendingCell = cell || null;
   selectPart(makeCustom(name || ""));
 }
 
@@ -364,8 +486,16 @@ async function selectPart(item) {
     }
     state.placeCell = loc ? { row: loc.row, col: loc.col, cell: loc.cell || cellLabel(loc.row, loc.col) } : firstEmpty();
   } else {
-    state.placeCell = firstEmpty();
+    // Never inherit the bin chosen for a previous part — that silently placed the
+    // new part on top of the old one, and the board treats a bin as single-item.
+    state.placeCell = state.pendingCell || firstEmpty();
+    if (state.placeCell && (state.config?.ui?.locateOnSelect !== false)) {
+      locate(state.placeCell.row, state.placeCell.col);
+    }
   }
+  state.pendingCell = null;
+  // openSheet turns this back on when the chosen bin already shares.
+  state.shareMode = false;
   openSheet();
 }
 
@@ -387,6 +517,10 @@ function openSheet() {
   const isNew = !stock;
   const qty = loc ? loc.qty : (isNew ? 1 : 0);
   const cell = state.placeCell;
+  // Default follows the bin: a compartment that already shares stays sharing.
+  if (cellItems(cell).length > 1) state.shareMode = true;
+  const share = state.shareMode;
+  card.classList.toggle("compact", share);
   const catOpts = CATEGORIES.map((c) =>
     `<option value="${esc(c)}" ${c === (item.category || "other") ? "selected" : ""}>${esc(c)}</option>`
   ).join("");
@@ -402,30 +536,38 @@ function openSheet() {
       <button class="close" id="sheetClose" aria-label="Close">✕</button>
     </div>
     ${isNew ? `<div class="sheet-fields">
-      <label>Name<input id="cName" type="text" autocomplete="off" spellcheck="false" value="${esc(item.name)}" placeholder="e.g. flux, SN74HC595, leftover screws" /></label>
+      <label class="span2">Name<input id="cName" type="text" autocomplete="off" spellcheck="false" value="${esc(item.name)}" placeholder="e.g. flux, SN74HC595, leftover screws" /></label>
       <label>Category<select id="cCat">${catOpts}</select></label>
-      <label>Package<input id="cPkg" type="text" autocomplete="off" value="${esc(item.package)}" placeholder="0805, DIP-8, bag…" /></label>
-      <label>MPN<input id="cMpn" type="text" autocomplete="off" value="${esc(item.mpn)}" /></label>
-      <label>Brand<input id="cBrand" type="text" autocomplete="off" value="${esc(item.brand)}" /></label>
+      <label>Package<input id="cPkg" type="text" autocomplete="off" value="${esc(item.package)}" placeholder="0805, DIP-8…" /></label>
     </div>` : ""}
-    <div class="stepper">
-      <button id="dec">−</button>
-      <div class="num"><input id="qty" type="number" min="0" inputmode="numeric" value="${qty}" /></div>
-      <button id="inc">+</button>
+    <div class="bin-mode${share ? " many" : ""}" role="radiogroup" aria-label="What this compartment holds">
+      <span class="thumb" aria-hidden="true"></span>
+      <button type="button" role="radio" data-mode="one" aria-checked="${share ? "false" : "true"}">One part</button>
+      <button type="button" role="radio" data-mode="many" aria-checked="${share ? "true" : "false"}">Multiple parts</button>
     </div>
-    <div class="nudge-row">
-      <button type="button" data-d="-5">−5</button>
-      <button type="button" data-d="-1">−1</button>
-      <button type="button" data-d="1">+1</button>
-      <button type="button" data-d="5">+5</button>
-    </div>
-    <div class="actions">
-      <button class="solid" id="btnLocate">${cell ? "Light " + cell.cell : "Pick a bin"}</button>
-      <button class="ghost" id="btnPut">${stock ? "Done" : "Put in " + (cell ? cell.cell : "a bin")}</button>
-      ${stock ? `<button class="danger" id="btnEmpty">Empty</button>` : ""}
+    ${share ? `<div class="bin-list" id="binList"></div>` : ""}
+    <div class="sheet-sticky">
+      <div class="stepper">
+        <button id="dec">−</button>
+        <div class="num"><input id="qty" type="number" min="0" inputmode="numeric" value="${qty}" /></div>
+        <button id="inc">+</button>
+      </div>
+      ${share ? "" : `<div class="nudge-row">
+        <button type="button" data-d="-5">−5</button>
+        <button type="button" data-d="-1">−1</button>
+        <button type="button" data-d="1">+1</button>
+        <button type="button" data-d="5">+5</button>
+      </div>`}
+      <div class="actions">
+        <button class="solid" id="btnLocate">${cell ? "Light " + cell.cell : "Pick a bin"}</button>
+        <button class="ghost" id="btnPut">${share ? "Add to " + (cell ? cell.cell : "bin") : (stock ? "Done" : "Put in " + (cell ? cell.cell : "a bin"))}</button>
+        ${stock && !share ? `<button class="danger" id="btnEmpty">Empty</button>` : ""}
+      </div>
     </div>
     <div class="mini-grid" id="mini"></div>
-    <div class="help">${stock ? "Hold +/− to count faster. Type a number to jump." : "Pick a bin, set how many you put in, done."}</div>
+    <div class="help">${share
+      ? "This bin holds several parts, each counted on its own. Switch back to One part to keep a bin single-use."
+      : (stock ? "Hold +/− to count faster. Type a number to jump." : "Pick a bin, set how many you put in, done.")}</div>
   `;
   sheet.hidden = false;
   sheet.classList.add("is-open");
@@ -446,15 +588,39 @@ function openSheet() {
   card.querySelectorAll(".nudge-row [data-d]").forEach((b) => {
     b.onclick = () => nudge(Number(b.dataset.d));
   });
-  $("#btnLocate").onclick = () => cell && locate(cell.row, cell.col);
-  $("#btnPut").onclick = () => { if (stock) closeSheet(); else commitQty(); };
+  $("#btnLocate").onclick = () => {
+    const c = state.placeCell;
+    if (c) locate(c.row, c.col);
+  };
+  card.querySelectorAll(".bin-mode [data-mode]").forEach((b) => {
+    b.onclick = () => {
+      const wantShare = b.dataset.mode === "many";
+      if (wantShare === state.shareMode) return;
+      if (!wantShare && cellItems(state.placeCell).length > 1) {
+        toast("Remove the extra parts first to make this a single-part bin");
+        return;
+      }
+      // Toggling re-renders the sheet, so keep anything already typed.
+      applySheetFields();
+      const typed = parseInt($("#qty")?.value, 10);
+      state.shareMode = wantShare;
+      openSheet();
+      const input = $("#qty");
+      if (input && Number.isFinite(typed)) input.value = String(typed);
+    };
+  });
+
+  const put = $("#btnPut");
+  put.onclick = () => {
+    if (stock && !share) closeSheet();
+    else withPending(put, () => commitQty());
+  };
   const empty = $("#btnEmpty");
-  if (empty) empty.onclick = () => clearCell();
+  if (empty) empty.onclick = () => withPending(empty, () => clearCell());
+  if (share) paintBinList();
   $("#qty").addEventListener("change", () => commitQty(true));
   paintMini();
   if (isNew) {
-    const nameIn = $("#cName");
-    if (nameIn && !nameIn.value) nameIn.focus();
     $("#cCat")?.addEventListener("change", () => {
       if (state.selected) {
         state.selected.category = $("#cCat").value;
@@ -476,6 +642,79 @@ function applySheetFields() {
   if ($("#cBrand")) item.brand = $("#cBrand").value.trim();
   item.color = colorFor(item.category);
   item.source = item.source || "custom";
+}
+
+// Compact one-row-per-part list for a shared compartment.
+function paintBinList() {
+  const box = $("#binList");
+  if (!box) return;
+  const cell = state.placeCell;
+  const rows = cellItems(cell);
+  box.innerHTML = "";
+  if (!rows.length) {
+    box.innerHTML = `<p class="bin-empty">${esc(cell ? cell.cell : "This bin")} is empty — set an amount below to add the first part.</p>`;
+    return;
+  }
+  for (const { item, qty } of rows) {
+    const row = document.createElement("div");
+    row.className = "bin-row";
+    row.innerHTML = `
+      <span class="tick" style="background:${esc(item.color || colorFor(item.category))}"></span>
+      <span class="bin-name" title="${esc(item.name)}">${esc(item.name)}</span>
+      <span class="bin-meta">${esc(item.package || item.category || "")}</span>
+      <span class="bin-step">
+        <button type="button" data-d="-1" aria-label="Take one ${esc(item.name)}">−</button>
+        <span class="n">${qty}</span>
+        <button type="button" data-d="1" aria-label="Add one ${esc(item.name)}">+</button>
+      </span>
+      <button type="button" class="bin-x" aria-label="Remove ${esc(item.name)} from ${esc(cell.cell)}">✕</button>`;
+    row.querySelectorAll(".bin-step [data-d]").forEach((b) => {
+      b.onclick = () => withPending(b, () => adjustInBin(item, Number(b.dataset.d)));
+    });
+    row.querySelector(".bin-x").onclick = (e) =>
+      withPending(e.currentTarget, () => removeFromBin(item));
+    box.appendChild(row);
+  }
+}
+
+async function adjustInBin(item, delta) {
+  const cell = state.placeCell;
+  if (!cell) return;
+  try {
+    // Not retried: replaying a delta would double-count.
+    const res = await api.send("/api/stock/adjust", "POST", { cell: cell.cell, id: item.id, delta });
+    applyLocalItemQty(item.id, cell, res.qty);
+    touchDirty();
+    paintBinList();
+    if (state.view === "rack") renderGrid();
+    refreshInventory().then(paintBinList).catch(() => {});
+  } catch (e) {
+    toast(e.message);
+    refreshInventory().then(paintBinList).catch(() => {});
+  }
+}
+
+async function removeFromBin(item) {
+  const cell = state.placeCell;
+  if (!cell) return;
+  try {
+    await api.send("/api/stock/clear", "POST", { cell: cell.cell, id: item.id }, { retry: true });
+    applyLocalItemQty(item.id, cell, 0);
+    touchDirty();
+    paintBinList();
+    if (state.view === "rack") renderGrid();
+    refreshInventory().then(paintBinList).catch(() => {});
+    toast(item.name + " removed from " + cell.cell);
+  } catch (e) { toast(e.message); }
+}
+
+function applyLocalItemQty(id, cell, qty) {
+  const item = state.inventory.find((it) => it.id === id);
+  if (!item) return;
+  item.locs = (item.locs || []).filter((l) => locCell(l) !== cell.cell);
+  if (qty > 0) item.locs.push({ row: cell.row, col: cell.col, cell: cell.cell, qty });
+  item.qty = item.locs.reduce((a, l) => a + (l.qty || 0), 0);
+  state.inventory = state.inventory.filter((i) => (i.locs || []).length);
 }
 
 function paintMini() {
@@ -511,9 +750,14 @@ function paintMini() {
         }
         state.placeCell = { row: r, col: c, cell: cellLabel(r, c) };
         locate(r, c);
+        // A different compartment means different contents and a different verb.
         paintMini();
+        paintBinList();
         const put = $("#btnPut");
-        if (put && !state.selected?.stock) put.textContent = "Put in " + state.placeCell.cell;
+        if (put && state.shareMode) put.textContent = "Add to " + state.placeCell.cell;
+        else if (put && !state.selected?.stock) put.textContent = "Put in " + state.placeCell.cell;
+        const light = $("#btnLocate");
+        if (light) light.textContent = "Light " + state.placeCell.cell;
       };
       mini.appendChild(b);
     }
@@ -588,11 +832,15 @@ async function commitQty(fromInput) {
     $("#cName")?.focus();
     return;
   }
+  const share = state.shareMode;
+  let res = null;
   try {
     if (item.stock && findStockMatch(item)) {
-      await api.send("/api/stock/set", "POST", { cell: cell.cell, qty });
+      const known = findStockMatch(item);
+      res = await api.send("/api/stock/set", "POST",
+        { cell: cell.cell, qty, id: share ? known.id : undefined }, { retry: true });
     } else {
-      await api.send("/api/stock/place", "POST", {
+      const payload = {
         name: item.name,
         mpn: item.mpn || "",
         sku: item.sku || "",
@@ -603,15 +851,35 @@ async function commitQty(fromInput) {
         color: item.color || colorFor(item.category),
         cell: cell.cell,
         qty,
-      });
+        // Sharing adds alongside whatever is already there, so nothing is evicted
+        // and the board never raises the occupied-bin conflict.
+        share,
+      };
+      try {
+        res = await api.send("/api/stock/place", "POST", payload, { retry: true });
+      } catch (e) {
+        if (e.status !== 409) throw e;
+        const who = e.data?.occupant || "another part";
+        if (!confirm(`${cell.cell} already holds ${who}. Replace it with ${item.name}?`)) {
+          toast("Kept " + who + " in " + cell.cell);
+          return;
+        }
+        res = await api.send("/api/stock/place", "POST", { ...payload, replace: true }, { retry: true });
+      }
     }
     touchDirty();
-    await refreshInventory();
+    // The board has acknowledged, so paint the result now and reconcile in the
+    // background — a second blocking round trip is what made saving feel slow.
+    applyLocalPlace(item, cell, qty, res?.id, share);
     state.selected.stock = findStockMatch(item);
+    if (state.view === "find") renderResults();
+    if (state.view === "rack") renderGrid();
+    refreshInventory().then(() => { if (state.shareMode) paintBinList(); }).catch(() => {});
     if (fromInput) {
       const input = $("#qty");
       if (input) input.value = String(qty);
       paintMini();
+      paintBinList();
       return;
     }
     toast(`${item.name} → ${cell.cell}`);
@@ -720,6 +988,22 @@ function renderSettings() {
       <p class="help">Default zig-zag: start A1 (top-left), go right to the end of the first row, drop to the right of the second row and go left, then left-to-right on the third row, and so on. Corners: A1 red, last column green, last row blue, opposite white. Tap-to-map only if a few bins are still wrong.</p>
     </div>
     <div class="card">
+      <h3>Wi-Fi</h3>
+      <p class="help" id="wifiHint">${state.status.ap
+        ? "This board is on its fallback AP because it could not join your network. Enter the LAN SSID and password, then wait ~20s and reconnect to your home Wi-Fi."
+        : "Saved on the chip (NVS), not in the GitHub firmware, so OTA keeps you on the LAN."}</p>
+      <div class="fields">
+        <div class="field"><label>SSID</label><input id="wifiSsid" type="text" autocomplete="off" value="${esc(state.status.wifiSsid || state.status.ssid || "")}" /></div>
+        <div class="field"><label>Password</label><input id="wifiPass" type="password" autocomplete="new-password" placeholder="unchanged if blank" /></div>
+        <div class="field"><label>Fixed IP</label><input id="wifiIp" type="text" autocomplete="off" inputmode="decimal" placeholder="blank = DHCP" value="${esc(state.status.staticIp || "")}" /></div>
+        <div class="field"><label>Router</label><input id="wifiGw" type="text" autocomplete="off" inputmode="decimal" placeholder="e.g. 192.168.1.1" value="${esc(state.status.gateway || "")}" /></div>
+      </div>
+      <p class="help">On mesh routers a DHCP lease can go stale and the rack stops answering while still showing as connected. A fixed IP outside the DHCP range avoids that — and gives you a stable address to bookmark.</p>
+      <div class="row-btns" style="margin-top:12px">
+        <button class="solid" id="btnWifi">Save & connect</button>
+      </div>
+    </div>
+    <div class="card">
       <h3>Look</h3>
       <div class="fields">
         ${field("brightness", "Brightness", cfg.leds.brightness, "number")}
@@ -761,7 +1045,8 @@ function renderSettings() {
     </div>
   `;
   root.querySelectorAll("[data-k]").forEach((el) => {
-    el.addEventListener("change", () => patchFromSettings());
+    // Coalesce: changing rows then cols used to fire two full config writes.
+    el.addEventListener("change", () => patchSoon());
   });
   root.querySelectorAll("[data-preset]").forEach((el) => {
     el.addEventListener("click", async () => {
@@ -796,6 +1081,19 @@ function renderSettings() {
     await api.send("/api/factory-reset", "POST", {});
     await refreshAll();
   };
+  $("#btnWifi").onclick = async () => {
+    const ssid = $("#wifiSsid")?.value.trim();
+    const pass = $("#wifiPass")?.value || "";
+    const staticIp = ($("#wifiIp")?.value || "").trim();
+    const gateway = ($("#wifiGw")?.value || "").trim();
+    if (!ssid) { toast("SSID required"); return; }
+    if (staticIp && !gateway) { toast("Router address required for a fixed IP"); return; }
+    try {
+      await api.send("/api/wifi", "PUT", { ssid, pass, staticIp, gateway });
+      toast(staticIp ? "Connecting as " + staticIp + "…" : "Connecting to " + ssid + "…");
+      setTimeout(() => refreshAll().catch(() => toast("Rejoin this page on the new network")), 8000);
+    } catch (e) { toast(e.message); }
+  };
   $("#btnOtaCheck").onclick = () => checkOta(true);
   $("#btnOtaInstall").onclick = () => installOta();
   paintOta();
@@ -821,6 +1119,14 @@ function select(key, label, value, opts) {
 }
 function check(key, label, value) {
   return `<div class="field"><label>${label}</label><label class="check"><input data-k="${key}" type="checkbox" ${value ? "checked" : ""} /> enabled</label></div>`;
+}
+
+let patchTimer = null;
+function patchSoon() {
+  clearTimeout(patchTimer);
+  patchTimer = setTimeout(() => {
+    patchFromSettings().catch((e) => toast(e.message));
+  }, 300);
 }
 
 async function patchFromSettings() {
@@ -874,7 +1180,8 @@ async function patchFromSettings() {
     (g("axis")?.value === "row") !== (prev.wiring?.rowFirst !== false) ||
     !!g("serpentine")?.checked !== !!prev.wiring?.serpentine ||
     num("offset", prev.wiring?.offset || 0) !== (prev.wiring?.offset || 0);
-  state.config = normalizeConfig(await api.send("/api/config", "PUT", payload));
+  // Absolute values, so a replay is harmless and worth one retry on a dropped packet.
+  state.config = normalizeConfig(await api.send("/api/config", "PUT", payload, { retry: true }));
   $("#rackName").textContent = state.config.rackName;
   api.send("/api/leds", "POST", { mode: layoutChanged ? "corners" : "idle" }).catch(() => {});
 }
@@ -1107,6 +1414,7 @@ function bind() {
 
 async function boot() {
   bind();
+  inflight.listeners.add(() => paintSys());
   renderChips();
   try {
     await refreshAll();

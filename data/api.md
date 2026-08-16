@@ -68,10 +68,26 @@ Each item:
 { "name": "Flux pen", "category": "chemical", "cell": "B2", "qty": 3 }
 ```
 
+A bin holds one part by default. Placing a different part into an occupied bin
+returns **409** with the current occupant instead of overwriting it:
+
+```json
+{ "error": "cell occupied", "cell": "B2", "occupant": "Flux pen" }
+```
+
+Add `"replace": true` to evict it, or `"share": true` to store both parts in the
+same compartment, each keeping its own quantity.
+
 `POST /api/stock/adjust` — `{ "cell": "A3", "delta": -1 }`  
 `POST /api/stock/set` — `{ "cell": "A3", "qty": 20 }`  
 `POST /api/stock/clear` — `{ "cell": "A3" }`  
 `POST /api/stock/move` — `{ "from": "A3", "to": "C1" }`
+
+In a shared compartment, add `"id"` to `adjust`, `set` and `clear` to pick one
+part out of the bin. Without an `id`, `clear` empties the whole compartment.
+
+`GET /api/bin?cell=B2` reports `shared`, `count`, `total` and an `items` array
+where each entry carries `cellQty` — the amount held in that bin.
 
 ### Lights
 

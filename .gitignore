@@ -13,3 +13,6 @@ data/state/
 scripts/__pycache__/
 .python-version
 *.bak
+server/data/rack.db
+/server/data
+/server/node_modules

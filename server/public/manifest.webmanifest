@@ -1,0 +1,15 @@
+{
+  "name": "Electronic Rack",
+  "short_name": "RACK",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#090a0c",
+  "theme_color": "#090a0c",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23090a0c'/%3E%3Crect x='6' y='6' width='8' height='8' rx='1.5' fill='%23e6a15c'/%3E%3Crect x='18' y='6' width='8' height='8' rx='1.5' fill='%233dd6e0'/%3E%3Crect x='6' y='18' width='8' height='8' rx='1.5' fill='%235b9dff'/%3E%3Crect x='18' y='18' width='8' height='8' rx='1.5' fill='%236ee7a8'/%3E%3C/svg%3E",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

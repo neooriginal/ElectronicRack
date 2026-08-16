@@ -1,0 +1,31 @@
+services:
+  rack:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+      - "${HTTPS_PORT:-8443}:8443"
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      TLS_PORT: 8443
+      DATA_DIR: /data
+      CERT_DIR: /certs
+      # Set to 1 when running behind a reverse proxy that terminates TLS, so
+      # rate limiting sees real client addresses instead of the proxy's.
+      TRUST_PROXY: "${TRUST_PROXY:-0}"
+    volumes:
+      # The database lives here. This is the only state worth backing up.
+      - rack-data:/data
+      # Drop key.pem and cert.pem in ./certs to enable https. Web Bluetooth will
+      # not work over plain http on anything except localhost.
+      - ./certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:8080/api/inventory',r=>process.exit(r.statusCode===401?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  rack-data:

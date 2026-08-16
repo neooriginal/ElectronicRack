@@ -1,49 +1,37 @@
 #pragma once
 
 #include <Arduino.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
+#include <ArduinoJson.h>
 
-#include "CatalogProxy.h"
-#include "HttpApp.h"
-#include "Inventory.h"
+#include "BleService.h"
+#include "Config.h"
+#include "Identity.h"
 #include "LedEngine.h"
-#include "OtaUpdate.h"
 #include "Rack.h"
-#include "Store.h"
 #include "Types.h"
-#include "WifiStation.h"
 
+// The rack is now a BLE peripheral that lights bins. It holds no inventory: the
+// browser owns that, backed by the server's database, and pushes a stock
+// snapshot on every connect. The only thing persisted here is the identity and
+// the LED hardware descriptor, because without pin/count/order nothing lights.
 class App {
 public:
-  Store store;
+  Identity identity;
   RackModel rack;
-  Inventory inventory;
   LedEngine leds;
-  WifiStation wifi;
-  CatalogProxy catalog;
-  HttpApp http;
-  OtaUpdate ota;
+  BleService ble;
   AppConfig config;
 
   void begin();
   void loop();
 
-  void lock();
-  void unlock();
-
-  bool saveConfig();
-  bool saveInventory();
-  void markInventoryDirty();
-  void flushInventory();
   void applyConfig(bool rebuildLeds);
-  void refreshStockLights();
-  bool mergeConfig(JsonVariantConst src, bool& rebuildLeds);
+  void applyWiring(JsonVariantConst src);
+  void applyLedConfig(JsonVariantConst src);
 
 private:
-  SemaphoreHandle_t mux_ = nullptr;
-  bool inventoryDirty_ = false;
-  uint32_t inventoryDirtyAt_ = 0;
+  void loadLedConfig();
+  void saveLedConfig();
 };
 
 extern App app;

@@ -1,7 +1,9 @@
-# 4MB flash, dual OTA (required for HTTP update) + LittleFS
+# 4MB flash, dual OTA for BLE firmware updates.
+# No filesystem and no data partition: the rack stores nothing but its identity
+# and LED hardware descriptor, both of which live in NVS. Inventory belongs to
+# the server's database.
 # Name,   Type, SubType, Offset,  Size, Flags
 nvs,      data, nvs,     0x9000,  0x5000,
 otadata,  data, ota,     0xe000,  0x2000,
-app0,     app,  ota_0,   0x10000, 0x1A0000,
-app1,     app,  ota_1,   0x1B0000,0x1A0000,
-spiffs,   data, spiffs,  0x350000,0xB0000,
+app0,     app,  ota_0,   0x10000, 0x1F0000,
+app1,     app,  ota_1,   0x200000,0x1F0000,
