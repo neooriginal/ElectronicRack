@@ -31,24 +31,19 @@ jobs:
             ~/.platformio/.cache
             ~/.platformio/packages
             ~/.platformio/platforms
-            .pio
           key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
       - name: Build firmware and filesystem
         env:
           GITHUB_SHA: ${{ github.sha }}
-        run: |
-          pio run
-          pio run -t buildfs
-
-      - name: Package release assets
-        env:
-          GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           mkdir -p dist
+          pio run
+          # buildfs wipes firmware.bin; copy it first
           cp .pio/build/esp32dev/firmware.bin dist/firmware.bin
+          pio run -t buildfs
           cp .pio/build/esp32dev/littlefs.bin dist/littlefs.bin
           python3 scripts/write_version.py dist/version.json
           ls -la dist
