@@ -128,7 +128,10 @@ class RackBLE {
   }
 
   async send(obj) {
-    if (!this.cmdChar) throw new Error("not connected to the rack");
+    // A server session can be fully authenticated with no live radio link at
+    // all — that's the whole point of remote access — so this is routine, not
+    // exceptional. Callers decide whether it's worth telling the user.
+    if (!this.cmdChar) throw new Error("connect via Bluetooth to control the lights");
     const bytes = new TextEncoder().encode(JSON.stringify(obj));
     // writeValueWithoutResponse is fire-and-forget and far faster under load;
     // acknowledged writes are reserved for commands whose loss would matter.

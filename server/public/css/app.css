@@ -742,3 +742,50 @@ h1 { margin: 4px 0 0; font-size: 28px; font-weight: 620; letter-spacing: -0.03em
   font-weight: 600;
   border-radius: 12px;
 }
+
+/* Remote session: authenticated but no live BLE link. */
+.pip.remote { background: var(--accent); }
+
+/* Saved-rack quick sign-in list on the connect gate. */
+.saved-list { display: grid; gap: 8px; margin: 18px 0; text-align: left; }
+.saved-row {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--bg-3);
+  color: var(--text);
+  cursor: pointer;
+}
+.saved-row:hover { border-color: var(--cyan); }
+.saved-row .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+.saved-row .rn { font-size: 14px; font-weight: 560; }
+.saved-row .rid { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+/* Access-key paste/copy row, used on both the gate and Settings. */
+.key-entry { margin-top: 18px; text-align: left; }
+.key-entry summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  list-style: none;
+}
+.key-entry summary::-webkit-details-marker { display: none; }
+.key-entry summary::before { content: "▸ "; }
+.key-entry[open] summary::before { content: "▾ "; }
+.key-row { display: flex; gap: 8px; margin-top: 8px; }
+.key-row input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  padding: 9px 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+.key-box .help { margin-top: 8px; }

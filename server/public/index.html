@@ -16,13 +16,26 @@
     <div class="connect-card">
       <span class="mark big" aria-hidden="true"></span>
       <h1>Connect to your rack</h1>
-      <p>The rack talks over Bluetooth — nothing is stored here until you pair.</p>
+      <p>The rack talks over Bluetooth — nothing is stored here until you pair, or sign in with an access key.</p>
+
+      <div id="savedRacks"></div>
+
       <button type="button" class="solid big" id="btnConnect">Connect over Bluetooth</button>
       <p class="help" id="gateUnsupported" hidden>
         This browser has no Web Bluetooth. Use Chrome or Edge on desktop or Android —
-        Safari and iOS do not support it.
+        Safari and iOS do not support it. You can still sign in below with an access key
+        from a device that has connected before.
       </p>
       <p class="help">Your browser will ask which device to pair with — pick the one named <code>Rack-…</code>.</p>
+
+      <details class="key-entry">
+        <summary>Sign in with an access key instead</summary>
+        <p class="help">No Bluetooth needed — this reaches your rack's data from anywhere, but can't control the lights.</p>
+        <div class="key-row">
+          <input type="text" id="keyInput" autocomplete="off" spellcheck="false" placeholder="rack1.20500d1a5ab8.…" />
+          <button type="button" class="ghost" id="btnKeySignIn">Sign in</button>
+        </div>
+      </details>
     </div>
   </div>
 

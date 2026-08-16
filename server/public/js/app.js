@@ -10,6 +10,7 @@ import {
 import { api, inflight } from "./api.js";
 import { rack, bleSupported } from "./ble.js";
 import { checkUpdate, install as installOta } from "./ota.js";
+import { encodeKey, decodeKey, remember, forget, savedRacks, getSecret } from "./keys.js";
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -22,7 +23,13 @@ const state = {
   inventory: [],
   config: null,
   identity: null,
+  rackId: null,
+  currentSecret: null,
+  // "connected" = signed in to a server session (works from anywhere).
+  // "linked" = that session also has a live BLE connection right now, which is
+  // the only way to actually move the lights or push new config to the rack.
   connected: false,
+  linked: false,
   selected: null,
   placeCell: null,
   pendingCell: null,
@@ -143,6 +150,22 @@ function findStockMatch(item) {
 
 // ---------- connect gate ----------
 
+function renderSavedRacks() {
+  const box = $("#savedRacks");
+  if (!box) return;
+  const list = savedRacks();
+  if (!list.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<div class="saved-list">${list.map((r) => `
+    <button type="button" class="saved-row" data-rack="${esc(r.rackId)}">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="rn">${esc(r.name || "Rack " + r.rackId.slice(-6))}</span>
+      <span class="rid">${esc(r.rackId)}</span>
+    </button>`).join("")}</div>`;
+  box.querySelectorAll("[data-rack]").forEach((b) => {
+    b.onclick = () => withPending(b, () => signInWithKey(b.dataset.rack, getSecret(b.dataset.rack)));
+  });
+}
+
 function paintConnectGate() {
   const el = $("#connectGate");
   if (!el) return;
@@ -152,6 +175,7 @@ function paintConnectGate() {
     $("#gateUnsupported").hidden = false;
     $("#btnConnect").hidden = true;
   }
+  if (!state.connected) renderSavedRacks();
 }
 
 async function pushDeviceState() {
@@ -182,25 +206,40 @@ async function pushStockSnapshot() {
   await rack.sendStock(cells);
 }
 
+// Loads inventory/config from the server and shows the app. Does not touch
+// BLE — this is the part that works identically whether we just paired or
+// just signed in remotely with a saved key.
+async function enterApp(name) {
+  const boot = await api.bootstrap();
+  state.config = normalizeConfig(boot.config);
+  state.inventory = boot.inventory || [];
+  state.connected = true;
+  state.rackId = boot.rackId;
+  // Falls back to whatever this device saved the last time it connected over
+  // BLE, so "Access" in Settings works after a plain cookie restore too.
+  if (!state.currentSecret) state.currentSecret = getSecret(boot.rackId);
+  $("#rackName").textContent = state.config.rackName || "Bench Rack";
+  paintConnectGate();
+  paintSys();
+  renderChips();
+  renderResults();
+  renderGrid();
+  toast("Connected to " + (name || boot.name || "your rack"));
+}
+
 async function doConnect() {
   const btn = $("#btnConnect");
   try {
     await withPending(btn, async () => {
       const ident = await rack.connect();
       state.identity = ident;
+      state.currentSecret = ident.secret;
       await api.session(ident.rackId, ident.secret);
     });
-    const boot = await api.bootstrap();
-    state.config = normalizeConfig(boot.config);
-    state.inventory = boot.inventory || [];
-    state.connected = true;
-    $("#rackName").textContent = state.config.rackName || "Bench Rack";
-    paintConnectGate();
-    paintSys();
+    state.linked = true;
+    await enterApp();
+    remember(state.identity.rackId, state.identity.secret, state.config.rackName);
     await pushDeviceState();
-    renderChips();
-    renderResults();
-    toast("Connected to " + (boot.name || "your rack"));
   } catch (e) {
     // NotFoundError covers two very different cases in Chrome and gives no way
     // to tell them apart: the user closed the picker, or the picker opened with
@@ -216,12 +255,43 @@ async function doConnect() {
   }
 }
 
+// Signs in using a previously captured secret — no Bluetooth, so this works
+// from anywhere and on any browser (including iPhone/Safari, which have no
+// Web Bluetooth at all). Lights and live config pushes stay unavailable until
+// something in this session also establishes a real BLE link.
+async function signInWithKey(rackId, secret) {
+  if (!rackId || !secret) { toast("That doesn't look like a valid access key"); return; }
+  try {
+    const res = await api.session(rackId, secret);
+    remember(rackId, secret, res.name);
+    state.currentSecret = secret;
+    await enterApp(res.name);
+  } catch (e) {
+    if (e.status === 401) toast("That key doesn't match this rack — check you copied the whole thing");
+    else toast(e.message || "Sign-in failed");
+  }
+}
+
+async function signOut() {
+  await api.logout().catch(() => {});
+  if (rack.connected) rack.disconnect();
+  state.connected = false;
+  state.linked = false;
+  state.inventory = [];
+  state.identity = null;
+  state.rackId = null;
+  state.currentSecret = null;
+  paintConnectGate();
+  paintSys();
+}
+
 rack.on((evt) => {
   if (evt.t === "_disconnected") {
-    state.connected = false;
-    paintConnectGate();
+    // Losing the physical BLE link does not sign you out — the server session
+    // is independent of it. Only lights and live pushes stop working.
+    state.linked = false;
     paintSys();
-    toast("Rack disconnected — tap Connect to resume");
+    if (state.connected) toast("Bluetooth link dropped — inventory still works, lights won't until you reconnect");
   } else if (evt.t === "walk" && state.view === "rack") {
     renderGrid(evt.cell || cellLabel(evt.row, evt.col));
   } else if (evt.t === "err") {
@@ -240,8 +310,16 @@ function paintSys() {
     text.textContent = "saving…";
     return;
   }
-  pip.className = "pip " + (state.connected ? "ok" : "warn");
-  text.textContent = state.connected ? "connected" : "not connected";
+  if (state.linked) {
+    pip.className = "pip ok";
+    text.textContent = "connected";
+  } else if (state.connected) {
+    pip.className = "pip remote";
+    text.textContent = "remote — lights off";
+  } else {
+    pip.className = "pip warn";
+    text.textContent = "not connected";
+  }
   const chip = $("#otaChip");
   if (chip) {
     chip.hidden = !(state.ota && state.ota.available);
@@ -836,10 +914,16 @@ async function patchFromSettings() {
 
   state.config = normalizeConfig(await api.putConfig(cfg));
   $("#rackName").textContent = state.config.rackName;
-  await pushDeviceState();
+  // Saved either way; the rack only gets the update if a BLE session is live.
+  try {
+    await pushDeviceState();
+  } catch (e) {
+    toast("Saved. " + (e.message || "Connect via Bluetooth to apply it to the rack now."));
+  }
 }
 
 async function startMap() {
+  if (!rack.connected) { toast("Connect via Bluetooth to calibrate — this needs to see the lights"); return; }
   state.mapping = true;
   state.mapLed = 0;
   await rack.identify(0);
@@ -854,7 +938,25 @@ function renderSettings() {
     <div class="card">
       <h3>Rack</h3>
       <div class="fields">${field("rackName", "Name", cfg.rackName)}</div>
-      <p class="help">Rack ID <code>${esc(state.identity?.rackId || "—")}</code></p>
+      <p class="help">Rack ID <code>${esc(state.rackId || "—")}</code></p>
+    </div>
+    <div class="card">
+      <h3>Access</h3>
+      <p class="help">
+        ${state.linked
+          ? "Bluetooth is connected — you can control the lights from here."
+          : "You're signed in remotely: inventory works, but the lights need a live Bluetooth connection."}
+      </p>
+      ${!state.linked ? `<div class="row-btns" style="margin-top:8px"><button class="ghost" id="btnLinkNow">Connect via Bluetooth</button></div>` : ""}
+      <div class="key-box" id="keyBox" style="margin-top:14px">
+        ${state.currentSecret
+          ? `<label class="span2">Access key<div class="key-row"><input readonly value="${esc(encodeKey(state.rackId, state.currentSecret))}" id="keyOut" /><button type="button" class="ghost" id="btnCopyKey">Copy</button></div></label>
+             <p class="help">Anyone with this key can view and edit this rack's inventory from anywhere — treat it like a password. Only Bluetooth reveals it; the server can't show it to you again if you lose it.</p>`
+          : `<p class="help">Connect via Bluetooth once to reveal and save this rack's access key for remote sign-in.</p>`}
+      </div>
+      <div class="row-btns" style="margin-top:12px">
+        <button class="danger" id="btnForgetDevice">Sign out of this device</button>
+      </div>
     </div>
     <div class="card">
       <h3>Grid</h3>
@@ -912,6 +1014,23 @@ function renderSettings() {
     </div>
   `;
 
+  $("#btnLinkNow")?.addEventListener("click", () => withPending($("#btnLinkNow"), doConnect));
+  $("#btnCopyKey")?.addEventListener("click", async () => {
+    const text = $("#keyOut").value;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("Access key copied");
+    } catch {
+      $("#keyOut").select();
+      toast("Select-all failed to auto-copy — copy it manually");
+    }
+  });
+  $("#btnForgetDevice")?.addEventListener("click", async () => {
+    if (!confirm("Sign out of this device? You'll need the access key or Bluetooth to get back in.")) return;
+    if (state.rackId) forget(state.rackId);
+    await signOut();
+  });
+
   root.querySelectorAll("[data-k]").forEach((el) => el.addEventListener("change", () => patchSoon()));
   root.querySelectorAll("[data-preset]").forEach((el) => {
     el.addEventListener("click", async () => {
@@ -957,6 +1076,7 @@ function renderSettings() {
     } catch (e) { toast(e.message); }
   };
   $("#btnOtaInstall").onclick = async () => {
+    if (!rack.connected) { toast("Connect via Bluetooth to install firmware — this can't be done remotely"); return; }
     const wrap = $("#otaBarWrap");
     const bar = $("#otaBar");
     wrap.hidden = false;
@@ -982,6 +1102,13 @@ function bind() {
   $$(".tab").forEach((t) => t.addEventListener("click", () => setView(t.dataset.view)));
   $("#btnIdle").addEventListener("click", () => rack.mode("idle").catch((e) => toast(e.message)));
   $("#btnConnect").addEventListener("click", doConnect);
+  const doKeySignIn = () => {
+    const parsed = decodeKey($("#keyInput").value);
+    if (!parsed) { toast("That doesn't look like a valid access key"); return; }
+    withPending($("#btnKeySignIn"), () => signInWithKey(parsed.rackId, parsed.secret));
+  };
+  $("#btnKeySignIn").addEventListener("click", doKeySignIn);
+  $("#keyInput").addEventListener("keydown", (e) => { if (e.key === "Enter") doKeySignIn(); });
   document.addEventListener("keydown", (e) => {
     if (e.key === "/" && document.activeElement !== $("#q")) { e.preventDefault(); setView("find"); $("#q").focus(); }
   });
@@ -990,7 +1117,14 @@ function bind() {
 
 async function boot() {
   bind();
-  paintConnectGate();
+  // A returning device already has a session cookie — no need to show the
+  // gate or ask for BLE/key at all. This is what makes remote access actually
+  // useful day to day, not just for the first sign-in.
+  try {
+    await enterApp();
+  } catch {
+    paintConnectGate();
+  }
   state.named = await loadNamedParts().catch(() => []);
   renderChips();
   renderResults();
