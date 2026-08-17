@@ -789,3 +789,34 @@ h1 { margin: 4px 0 0; font-size: 28px; font-weight: 620; letter-spacing: -0.03em
   color: var(--text);
 }
 .key-box .help { margin-top: 8px; }
+
+.header-connect {
+  border: 1px solid var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: 11px;
+  font-weight: 650;
+}
+.header-connect:hover { background: var(--accent); color: #1a1206; }
+
+/* Remote session: dim write controls. Clicks still land (requireLink() in
+   app.js explains why in a toast) — pointer-events stays on so the guard can
+   actually run, rather than a silent, unexplained dead button. */
+body.remote-readonly .stepper button,
+body.remote-readonly .nudge-row button,
+body.remote-readonly #btnPut,
+body.remote-readonly #btnEmpty,
+body.remote-readonly .bin-step button,
+body.remote-readonly .bin-x,
+body.remote-readonly .row-step button,
+body.remote-readonly .settings-col input[data-k],
+body.remote-readonly .settings-col select[data-k],
+body.remote-readonly [data-preset],
+body.remote-readonly #btnZigzag,
+body.remote-readonly #btnMap,
+body.remote-readonly #btnClearMap {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

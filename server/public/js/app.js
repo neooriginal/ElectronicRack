@@ -58,6 +58,17 @@ async function withPending(btn, fn) {
   }
 }
 
+// Remote sessions (authenticated, no live BLE) are read-only: nothing physically
+// confirms a bin got touched, so edits made from across town shouldn't silently
+// pile up against a rack no one is looking at. This is a workflow guard, not a
+// security boundary — the server still accepts writes from any valid session;
+// it just isn't asked to while this is in effect.
+function requireLink(doingWhat) {
+  if (rack.connected) return true;
+  toast(`Connect via Bluetooth to ${doingWhat || "make changes"} — you're viewing remotely`);
+  return false;
+}
+
 function cellLabel(row, col) {
   let n = col + 1, s = "";
   while (n > 0) {
@@ -227,8 +238,8 @@ async function enterApp(name) {
   toast("Connected to " + (name || boot.name || "your rack"));
 }
 
-async function doConnect() {
-  const btn = $("#btnConnect");
+async function doConnect(triggerBtn) {
+  const btn = triggerBtn || $("#btnConnect");
   try {
     await withPending(btn, async () => {
       const ident = await rack.connect();
@@ -308,18 +319,25 @@ function paintSys() {
   if (inflight.n > 0) {
     pip.className = "pip busy";
     text.textContent = "saving…";
-    return;
-  }
-  if (state.linked) {
+  } else if (state.linked) {
     pip.className = "pip ok";
     text.textContent = "connected";
   } else if (state.connected) {
     pip.className = "pip remote";
-    text.textContent = "remote — lights off";
+    text.textContent = "remote — read only";
   } else {
     pip.className = "pip warn";
     text.textContent = "not connected";
   }
+
+  // Remote mode has no live radio to confirm a bin was actually touched, so
+  // it's read-only — dim the controls that would otherwise write, and offer
+  // the one click that upgrades this session to a full link.
+  const readOnly = state.connected && !state.linked;
+  document.body.classList.toggle("remote-readonly", readOnly);
+  const headerConnect = $("#btnHeaderConnect");
+  if (headerConnect) headerConnect.hidden = !readOnly;
+
   const chip = $("#otaChip");
   if (chip) {
     chip.hidden = !(state.ota && state.ota.available);
@@ -401,6 +419,7 @@ function resultRow(item) {
 }
 
 async function quickAdjust(item, d) {
+  if (!requireLink("adjust stock")) return;
   const stock = item.stock || findStockMatch(item);
   const loc = stock && primaryLoc(stock);
   if (!stock || !loc) return;
@@ -426,13 +445,16 @@ function renderResults() {
       group.innerHTML = `<div class="group-h">In the rack<span>${stock.length}</span></div>`;
       const list = document.createElement("div");
       list.className = "list";
-      for (const it of stock) list.appendChild(resultRow({ ...it, stock: it }));
+      // searchInventory() already sets .stock to the original item (with real
+      // .locs); wrapping it again here would point .stock at the normalized,
+      // locs-stripped shell instead and send every open sheet to a wrong bin.
+      for (const it of stock) list.appendChild(resultRow(it));
       group.appendChild(list);
       root.appendChild(group);
     }
   } else {
     const groups = [
-      ["In the rack", stock.map((s) => ({ ...s, stock: s }))],
+      ["In the rack", stock],
       ["Catalog", local],
     ];
     for (const [label, items] of groups) {
@@ -620,6 +642,7 @@ function paintMini() {
       b.onclick = async () => {
         const stock = state.selected?.stock;
         if (stock && primaryLoc(stock) && (primaryLoc(stock).row !== r || primaryLoc(stock).col !== c)) {
+          if (!requireLink("move stock")) return;
           try {
             const from = primaryLoc(stock);
             await api.clear({ row: from.row, col: from.col, id: stock.id });
@@ -674,6 +697,7 @@ function paintBinList() {
 }
 
 async function adjustInBin(item, delta) {
+  if (!requireLink("adjust stock")) return;
   const cell = state.placeCell;
   if (!cell) return;
   try {
@@ -686,6 +710,7 @@ async function adjustInBin(item, delta) {
 }
 
 async function removeFromBin(item) {
+  if (!requireLink("remove a part")) return;
   const cell = state.placeCell;
   if (!cell) return;
   try {
@@ -728,6 +753,7 @@ function applyLocalPlace(item, cell, qty, id, share) {
 }
 
 async function nudge(delta) {
+  if (!requireLink("adjust stock")) return;
   const input = $("#qty");
   if (!input) return;
   const next = Math.max(0, (parseInt(input.value, 10) || 0) + delta);
@@ -747,6 +773,7 @@ async function nudge(delta) {
 }
 
 async function commitQty(fromInput) {
+  if (!requireLink("save this")) return;
   applySheetFields();
   const cell = state.placeCell;
   if (!cell) { toast("No empty bin — open Grid and tap one, or raise rows/columns in Setup"); return; }
@@ -794,6 +821,7 @@ async function commitQty(fromInput) {
 }
 
 async function clearCell() {
+  if (!requireLink("empty this bin")) return;
   const cell = state.placeCell;
   if (!cell) return;
   try {
@@ -884,6 +912,7 @@ function patchSoon() {
 }
 
 async function patchFromSettings() {
+  if (!requireLink("change setup")) return;
   const g = (k) => $("#settings [data-k='" + k + "']");
   const num = (k, fallback) => { const n = Number(g(k)?.value); return Number.isFinite(n) ? n : fallback; };
   const rows = Math.max(1, num("rows", state.config?.rows || 6));
@@ -1014,7 +1043,7 @@ function renderSettings() {
     </div>
   `;
 
-  $("#btnLinkNow")?.addEventListener("click", () => withPending($("#btnLinkNow"), doConnect));
+  $("#btnLinkNow")?.addEventListener("click", () => doConnect($("#btnLinkNow")));
   $("#btnCopyKey")?.addEventListener("click", async () => {
     const text = $("#keyOut").value;
     try {
@@ -1053,6 +1082,7 @@ function renderSettings() {
   $("#btnWalk").onclick = () => rack.mode("walk").catch((e) => toast(e.message));
   $("#btnMap").onclick = () => startMap();
   $("#btnClearMap").onclick = async () => {
+    if (!requireLink("clear the wiring map")) return;
     state.config.overrides = {};
     await api.putConfig(state.config);
     await rack.wiring(state.config.wiring);
@@ -1101,7 +1131,8 @@ function bind() {
   $("#btnAddCustom").addEventListener("click", () => openCustom(state.q.trim()));
   $$(".tab").forEach((t) => t.addEventListener("click", () => setView(t.dataset.view)));
   $("#btnIdle").addEventListener("click", () => rack.mode("idle").catch((e) => toast(e.message)));
-  $("#btnConnect").addEventListener("click", doConnect);
+  $("#btnConnect").addEventListener("click", () => doConnect($("#btnConnect")));
+  $("#btnHeaderConnect").addEventListener("click", () => doConnect($("#btnHeaderConnect")));
   const doKeySignIn = () => {
     const parsed = decodeKey($("#keyInput").value);
     if (!parsed) { toast("That doesn't look like a valid access key"); return; }
